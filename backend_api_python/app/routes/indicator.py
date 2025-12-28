@@ -1,0 +1,433 @@
+"""
+Indicator APIs (local-first).
+
+These endpoints are used by the frontend `/indicator-analysis` page.
+In the original architecture, the frontend called PHP endpoints like:
+`/addons/quantdinger/indicator/getIndicators`.
+
+For local mode, we expose Python equivalents under `/api/indicator/*`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from typing import Any, Dict, List
+
+from flask import Blueprint, Response, jsonify, request
+
+from app.utils.db import get_db_connection
+from app.utils.logger import get_logger
+import requests
+
+logger = get_logger(__name__)
+
+indicator_bp = Blueprint("indicator", __name__)
+
+
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _extract_indicator_meta_from_code(code: str) -> Dict[str, str]:
+    """
+    Extract indicator name/description from python code.
+    Expected variables:
+      my_indicator_name = "..."
+      my_indicator_description = "..."
+    """
+    if not code or not isinstance(code, str):
+        return {"name": "", "description": ""}
+
+    # Simple assignment capture for single/double quoted strings.
+    name_match = re.search(r'^\s*my_indicator_name\s*=\s*([\'"])(.*?)\1\s*$', code, re.MULTILINE)
+    desc_match = re.search(r'^\s*my_indicator_description\s*=\s*([\'"])(.*?)\1\s*$', code, re.MULTILINE)
+
+    name = (name_match.group(2).strip() if name_match else "")[:100]
+    description = (desc_match.group(2).strip() if desc_match else "")[:500]
+    return {"name": name, "description": description}
+
+
+def _row_to_indicator(row: Dict[str, Any], user_id: int) -> Dict[str, Any]:
+    """
+    Map SQLite row -> frontend expected indicator shape.
+
+    Frontend uses:
+    - id, name, description, code
+    - is_buy (1 bought, 0 custom)
+    - user_id / userId
+    - end_time (optional)
+    """
+    return {
+        "id": row.get("id"),
+        "user_id": row.get("user_id") if row.get("user_id") is not None else user_id,
+        "is_buy": row.get("is_buy") if row.get("is_buy") is not None else 0,
+        "end_time": row.get("end_time") if row.get("end_time") is not None else 1,
+        "name": row.get("name") or "",
+        "code": row.get("code") or "",
+        "description": row.get("description") or "",
+        "publish_to_community": row.get("publish_to_community") if row.get("publish_to_community") is not None else 0,
+        "pricing_type": row.get("pricing_type") or "free",
+        "price": row.get("price") if row.get("price") is not None else 0,
+        # Local mode: encryption is not supported; keep field for frontend compatibility (always 0).
+        "is_encrypted": 0,
+        "preview_image": row.get("preview_image") or "",
+        # Prefer MySQL-like time fields; fallback to legacy local columns.
+        "createtime": row.get("createtime") or row.get("created_at"),
+        "updatetime": row.get("updatetime") or row.get("updated_at"),
+    }
+
+
+@indicator_bp.route("/getIndicators", methods=["POST"])
+def get_indicators():
+    """
+    Get indicator list for a user.
+
+    Request:
+      { userid: number }
+
+    Response:
+      { code: 1, data: [ ... ] }
+    """
+    try:
+        data = request.get_json() or {}
+        user_id = int(data.get("userid") or 1)
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+            # Local mode: "我的指标" should include both purchased and custom indicators.
+            cur.execute(
+                """
+                SELECT
+                  id, user_id, is_buy, end_time, name, code, description,
+                  publish_to_community, pricing_type, price, is_encrypted, preview_image,
+                  createtime, updatetime, created_at, updated_at
+                FROM qd_indicator_codes
+                WHERE user_id = ?
+                ORDER BY id DESC
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall() or []
+            cur.close()
+
+        out = [_row_to_indicator(r, user_id) for r in rows]
+        return jsonify({"code": 1, "msg": "success", "data": out})
+    except Exception as e:
+        logger.error(f"get_indicators failed: {str(e)}", exc_info=True)
+        return jsonify({"code": 0, "msg": str(e), "data": []}), 500
+
+
+@indicator_bp.route("/saveIndicator", methods=["POST"])
+def save_indicator():
+    """
+    Create or update an indicator.
+
+    Request (frontend sends many extra fields; we store only the essentials):
+      {
+        userid: number,
+        id: number (0 for create),
+        name: string,
+        code: string,
+        description?: string,
+        ...
+      }
+    """
+    try:
+        data = request.get_json() or {}
+        user_id = int(data.get("userid") or 1)
+        indicator_id = int(data.get("id") or 0)
+        code = data.get("code") or ""
+        name = (data.get("name") or "").strip()
+        description = (data.get("description") or "").strip()
+        publish_to_community = 1 if data.get("publishToCommunity") or data.get("publish_to_community") else 0
+        pricing_type = (data.get("pricingType") or data.get("pricing_type") or "free").strip() or "free"
+        try:
+            price = float(data.get("price") or 0)
+        except Exception:
+            price = 0.0
+        preview_image = (data.get("previewImage") or data.get("preview_image") or "").strip()
+
+        if not code or not str(code).strip():
+            return jsonify({"code": 0, "msg": "code is required", "data": None}), 400
+
+        # Local dev UX: if name/description not provided, derive from code variables.
+        if not name or not description:
+            meta = _extract_indicator_meta_from_code(code)
+            if not name:
+                name = meta.get("name") or ""
+            if not description:
+                description = meta.get("description") or ""
+
+        if not name:
+            name = "Custom Indicator"
+
+        now = _now_ts()
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+            if indicator_id and indicator_id > 0:
+                cur.execute(
+                    """
+                    UPDATE qd_indicator_codes
+                    SET name = ?, code = ?, description = ?,
+                        publish_to_community = ?, pricing_type = ?, price = ?, preview_image = ?,
+                        updatetime = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ? AND (is_buy IS NULL OR is_buy = 0)
+                    """,
+                    (name, code, description, publish_to_community, pricing_type, price, preview_image, now, now, indicator_id, user_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO qd_indicator_codes
+                      (user_id, is_buy, end_time, name, code, description,
+                       publish_to_community, pricing_type, price, preview_image,
+                       createtime, updatetime, created_at, updated_at)
+                    VALUES (?, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (user_id, name, code, description, publish_to_community, pricing_type, price, preview_image, now, now, now, now),
+                )
+                indicator_id = int(cur.lastrowid or 0)
+            db.commit()
+            cur.close()
+
+        return jsonify({"code": 1, "msg": "success", "data": {"id": indicator_id, "userid": user_id}})
+    except Exception as e:
+        logger.error(f"save_indicator failed: {str(e)}", exc_info=True)
+        return jsonify({"code": 0, "msg": str(e), "data": None}), 500
+
+
+@indicator_bp.route("/deleteIndicator", methods=["POST"])
+def delete_indicator():
+    """Delete an indicator by id."""
+    try:
+        data = request.get_json() or {}
+        user_id = int(data.get("userid") or 1)
+        indicator_id = int(data.get("id") or 0)
+        if not indicator_id:
+            return jsonify({"code": 0, "msg": "id is required", "data": None}), 400
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                "DELETE FROM qd_indicator_codes WHERE id = ? AND user_id = ? AND (is_buy IS NULL OR is_buy = 0)",
+                (indicator_id, user_id),
+            )
+            db.commit()
+            cur.close()
+
+        return jsonify({"code": 1, "msg": "success", "data": None})
+    except Exception as e:
+        logger.error(f"delete_indicator failed: {str(e)}", exc_info=True)
+        return jsonify({"code": 0, "msg": str(e), "data": None}), 500
+
+
+@indicator_bp.route("/aiGenerate", methods=["POST"])
+def ai_generate():
+    """
+    SSE endpoint to generate indicator code.
+
+    Frontend expects 'text/event-stream' with chunks:
+      data: {"content":"..."}\n\n
+    then:
+      data: [DONE]\n\n
+
+    Local-first: if OpenRouter key is not configured, we return a reasonable template.
+    """
+    data = request.get_json() or {}
+    prompt = (data.get("prompt") or "").strip()
+    existing = (data.get("existingCode") or "").strip()
+
+    if not prompt:
+        # Keep SSE contract (match PHP behavior) so frontend doesn't look "stuck".
+        def _err_stream():
+            yield "data: " + json.dumps({"error": "提示词不能为空"}, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+
+        return Response(
+            _err_stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # System prompt copied/adapted from the legacy PHP implementation.
+    SYSTEM_PROMPT = """# Role
+
+You are an expert Python quantitative trading developer. Your task is to write custom indicator or strategy scripts for a professional K-line chart component running in a browser (Pyodide environment).
+
+# Context & Environment
+
+1. **Runtime Environment**: Code runs in a browser sandbox, **network access is prohibited** (cannot use `pip` or `requests`).
+
+2. **Pre-installed Libraries**: The system has already imported `pandas as pd` and `numpy as np`. **DO NOT** include `import pandas as pd` or `import numpy as np` in your generated code. Use `pd` and `np` directly.
+
+3. **Input Data**: The system provides a variable `df` (Pandas DataFrame) with index from 0 to N.
+   - Columns include: `df['time']` (timestamp), `df['open']`, `df['high']`, `df['low']`, `df['close']`, `df['volume']`.
+
+# Output Requirement (Strict)
+
+At the end of code execution, you **MUST** define a dictionary variable named `output`. The system only reads this variable to render the chart.
+
+Additionally, you MUST define:
+- my_indicator_name = "..."
+- my_indicator_description = "..."
+
+`output` MUST follow this shape:
+output = {
+  "name": my_indicator_name,
+  "plots": [ { "name": str, "data": list, "color": "#RRGGBB", "overlay": bool, "type": "line" (optional) } ],
+  "signals": [ { "type": "buy"|"sell", "text": str, "data": list, "color": "#RRGGBB" } ] (optional),
+  "calculatedVars": {} (optional)
+}
+Where `data` lists MUST have the same length as `df` and use `None` for "no value".
+
+Backtest/execution compatibility (recommended):
+- Also set df['buy'] and df['sell'] as boolean columns (same length as df).
+
+# Signal confirmation / execution timing (IMPORTANT)
+- Signals are generally confirmed on bar close. The backtest engine may execute them on the next bar open to better match live trading and avoid look-ahead bias.
+
+# Robustness requirements (IMPORTANT)
+- Always handle NaN/inf and division-by-zero (common in RSI/BB/RSV calculations).
+- Avoid overly restrictive entry/exit logic that results in zero buy or zero sell signals.
+  For multi-indicator strategies, do NOT require a crossover AND extreme RSI on the same bar unless explicitly requested.
+- Prefer edge-triggered signals (one-shot) to avoid repeated consecutive signals:
+  buy = raw_buy.fillna(False) & (~raw_buy.shift(1).fillna(False))
+  sell = raw_sell.fillna(False) & (~raw_sell.shift(1).fillna(False))
+- If your final conditions produce no buys or no sells in the visible range, relax logically (e.g., remove one filter or widen thresholds).
+
+IMPORTANT: Output Python code directly, without explanations, without descriptions, start directly with code, and do NOT use markdown code blocks like ```python.
+"""
+
+    def _template_code() -> str:
+        # Fallback template that follows the project expectations.
+        header = (
+            f"my_indicator_name = \"Custom Indicator\"\n"
+            f"my_indicator_description = \"{prompt.replace('\\n', ' ')[:200]}\"\n\n"
+        )
+        body = (
+            "df = df.copy()\n\n"
+            "# Example: robust RSI with edge-triggered buy/sell (no position management, no TP/SL on chart)\n"
+            "rsi_len = 14\n"
+            "delta = df['close'].diff()\n"
+            "gain = delta.clip(lower=0)\n"
+            "loss = (-delta).clip(lower=0)\n"
+            "# Wilder-style smoothing (stable and avoids early NaN explosion)\n"
+            "avg_gain = gain.ewm(alpha=1/rsi_len, adjust=False).mean()\n"
+            "avg_loss = loss.ewm(alpha=1/rsi_len, adjust=False).mean()\n"
+            "rs = avg_gain / avg_loss.replace(0, np.nan)\n"
+            "rsi = 100 - (100 / (1 + rs))\n"
+            "rsi = rsi.fillna(50)\n\n"
+            "# Raw conditions (avoid overly strict filters)\n"
+            "raw_buy = (rsi < 30)\n"
+            "raw_sell = (rsi > 70)\n"
+            "# One-shot signals\n"
+            "buy = raw_buy.fillna(False) & (~raw_buy.shift(1).fillna(False))\n"
+            "sell = raw_sell.fillna(False) & (~raw_sell.shift(1).fillna(False))\n"
+            "df['buy'] = buy.astype(bool)\n"
+            "df['sell'] = sell.astype(bool)\n\n"
+            "buy_marks = [df['low'].iloc[i] * 0.995 if bool(buy.iloc[i]) else None for i in range(len(df))]\n"
+            "sell_marks = [df['high'].iloc[i] * 1.005 if bool(sell.iloc[i]) else None for i in range(len(df))]\n\n"
+            "output = {\n"
+            "  'name': my_indicator_name,\n"
+            "  'plots': [\n"
+            "    {'name': 'RSI(14)', 'data': rsi.tolist(), 'color': '#faad14', 'overlay': False}\n"
+            "  ],\n"
+            "  'signals': [\n"
+            "    {'type': 'buy', 'text': 'B', 'data': buy_marks, 'color': '#00E676'},\n"
+            "    {'type': 'sell', 'text': 'S', 'data': sell_marks, 'color': '#FF5252'}\n"
+            "  ]\n"
+            "}\n"
+        )
+        if existing:
+            header = "# Existing code was provided as context.\n" + header
+        return header + body
+
+    def _openrouter_base_and_key() -> tuple[str, str]:
+        """
+        Support both:
+          - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+          - OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions
+        """
+        key = os.getenv("OPENROUTER_API_KEY", "").strip()
+        base = os.getenv("OPENROUTER_BASE_URL", "").strip()
+        if not base:
+            api_url = os.getenv("OPENROUTER_API_URL", "").strip()
+            if api_url.endswith("/chat/completions"):
+                base = api_url[: -len("/chat/completions")]
+        if not base:
+            base = "https://openrouter.ai/api/v1"
+        return base, key
+
+    def _generate_code_via_openrouter() -> str:
+        base_url, api_key = _openrouter_base_and_key()
+        if not api_key:
+            return _template_code()
+
+        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
+        # Match legacy PHP default more closely
+        temperature = float(os.getenv("OPENROUTER_TEMPERATURE", "0.7") or 0.7)
+
+        # Build user prompt (match PHP behavior)
+        user_prompt = prompt
+        if existing:
+            user_prompt = (
+                "# Existing Code (modify based on this):\n\n```python\n"
+                + existing.strip()
+                + "\n```\n\n# Modification Requirements:\n\n"
+                + prompt
+                + "\n\nPlease generate complete new Python code based on the existing code above and my modification requirements. Output the complete Python code directly, without explanations, without segmentation."
+            )
+
+        payload = {
+            "model": model,
+            "temperature": temperature,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+
+        resp = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        j = resp.json()
+        content = (((j.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
+        return content.strip() or _template_code()
+
+    def stream():
+        # 不扣任何 QDT：开源本地版直接生成/返回代码
+        try:
+            code_text = _generate_code_via_openrouter()
+        except Exception as e:
+            logger.warning(f"ai_generate openrouter failed, fallback to template: {e}")
+            code_text = _template_code()
+
+        # Stream in chunks (front-end appends).
+        chunk_size = 200
+        for i in range(0, len(code_text), chunk_size):
+            chunk = code_text[i : i + chunk_size]
+            yield "data: " + json.dumps({"content": chunk}, ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return Response(
+        stream(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+

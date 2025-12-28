@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-cmn-Hans">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <link rel="icon" href="<%= BASE_URL %>slogo.png">
+    <title>QuantDinger</title>
+    <style>
+      .first-loading-wrp {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        min-height: 420px;
+        height: 100vh;
+        background: #fff;
+        position: relative;
+        overflow: hidden;
+      }
+      
+      .first-loading-wrp > h2 {
+        font-size: 32px;
+        margin-bottom: 40px;
+        color: #333;
+        font-weight: 600;
+      }
+      
+      .first-loading-wrp .loading-wrp {
+        padding: 40px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        position: relative;
+        width: 100%;
+        max-width: 600px;
+      }
+      
+      /* 像素风格小狗奔跑动画 */
+      .pixel-dog-container {
+        position: relative;
+        width: 100%;
+        height: 140px;
+        margin: 0 auto 30px;
+        overflow: hidden;
+      }
+      
+      .pixel-dog {
+        position: absolute;
+        left: 0;
+        bottom: 30px;
+        width: 40px;
+        height: 50px;
+        animation: dogRun 0.5s steps(4) infinite, dogMove 4s linear infinite;
+        image-rendering: pixelated;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: crisp-edges;
+        transform-origin: center bottom;
+      }
+      
+      /* 所有像素元素都使用锐利边缘 */
+      .pixel-dog * {
+        image-rendering: pixelated;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: crisp-edges;
+      }
+      
+      /* 狗头 - 黑白相间设计，使用简单的几何形状 */
+      .dog-head {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 40px;
+        height: 40px;
+        background: #000;
+        clip-path: polygon(15% 0%, 85% 0%, 100% 25%, 100% 75%, 85% 100%, 15% 100%, 0% 75%, 0% 25%);
+        border: 2px solid #000;
+        box-sizing: border-box;
+        animation: headBob 0.5s steps(4) infinite;
+      }
+      
+      @keyframes headBob {
+        0%, 100% { transform: translateY(0px) rotate(0deg); }
+        25% { transform: translateY(-2px) rotate(-2deg); }
+        50% { transform: translateY(0px) rotate(0deg); }
+        75% { transform: translateY(-1px) rotate(1deg); }
+      }
+      
+      /* 左半部分（白色） */
+      .dog-head::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 50%;
+        height: 100%;
+        background: #fff;
+        clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+      }
+      
+      /* 左耳（白色三角形） */
+      .dog-ear-left {
+        position: absolute;
+        left: 4px;
+        top: -6px;
+        width: 10px;
+        height: 10px;
+        background: #fff;
+        clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+      }
+      
+      /* 右耳（黑色三角形） */
+      .dog-ear-right {
+        position: absolute;
+        right: 4px;
+        top: -6px;
+        width: 10px;
+        height: 10px;
+        background: #000;
+        clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+      }
+      
+      /* 左眼（黑色点在白色区域） */
+      .dog-eye-left {
+        position: absolute;
+        left: 10px;
+        top: 14px;
+        width: 6px;
+        height: 6px;
+        background: #000;
+        border-radius: 0;
+        clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+      }
+      
+      /* 右眼（白色点在黑色区域） */
+      .dog-eye-right {
+        position: absolute;
+        right: 10px;
+        top: 14px;
+        width: 6px;
+        height: 6px;
+        background: #fff;
+        border-radius: 0;
+        clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+      }
+      
+      /* 鼻子（黑色，中间） */
+      .dog-nose {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, 30%);
+        width: 8px;
+        height: 5px;
+        background: #000;
+        border-radius: 0;
+        clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+      }
+      
+      /* 身体 - 黑白相间 */
+      .dog-body {
+        position: absolute;
+        left: 8px;
+        top: 36px;
+        width: 24px;
+        height: 14px;
+        background: #000;
+        border: 1px solid #000;
+        box-sizing: border-box;
+      }
+      
+      .dog-body::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 50%;
+        height: 100%;
+        background: #fff;
+      }
+      
+      /* 左前腿 */
+      .dog-leg-front-left {
+        position: absolute;
+        left: 10px;
+        top: 48px;
+        width: 6px;
+        height: 12px;
+        background: #000;
+        border-radius: 0;
+        animation: legMoveFront 0.5s steps(4) infinite;
+      }
+      
+      /* 右前腿 */
+      .dog-leg-front-right {
+        position: absolute;
+        left: 18px;
+        top: 48px;
+        width: 6px;
+        height: 12px;
+        background: #fff;
+        border-radius: 0;
+        animation: legMoveFront 0.5s steps(4) infinite 0.125s;
+      }
+      
+      /* 左后腿 */
+      .dog-leg-back-left {
+        position: absolute;
+        left: 6px;
+        top: 48px;
+        width: 6px;
+        height: 12px;
+        background: #fff;
+        border-radius: 0;
+        animation: legMoveBack 0.5s steps(4) infinite 0.125s;
+      }
+      
+      /* 右后腿 */
+      .dog-leg-back-right {
+        position: absolute;
+        left: 22px;
+        top: 48px;
+        width: 6px;
+        height: 12px;
+        background: #000;
+        border-radius: 0;
+        animation: legMoveBack 0.5s steps(4) infinite;
+      }
+      
+      /* 尾巴 */
+      .dog-tail {
+        position: absolute;
+        right: -6px;
+        top: 38px;
+        width: 6px;
+        height: 6px;
+        background: #000;
+        border-radius: 0;
+        animation: tailWag 0.25s ease-in-out infinite alternate;
+      }
+      
+      /* 奔跑动画 - 上下跳动（像素风格，使用steps） */
+      @keyframes dogRun {
+        0% { transform: translateY(0px); }
+        25% { transform: translateY(-4px); }
+        50% { transform: translateY(0px); }
+        75% { transform: translateY(-2px); }
+        100% { transform: translateY(0px); }
+      }
+      
+      /* 移动动画 - 左右移动 */
+      @keyframes dogMove {
+        0% { left: -40px; }
+        100% { left: calc(100% + 40px); }
+      }
+      
+      /* 前腿动画 - 像素风格步进 */
+      @keyframes legMoveFront {
+        0% { transform: translateY(0px); }
+        25% { transform: translateY(-8px); }
+        50% { transform: translateY(0px); }
+        75% { transform: translateY(-4px); }
+        100% { transform: translateY(0px); }
+      }
+      
+      /* 后腿动画 - 像素风格步进 */
+      @keyframes legMoveBack {
+        0% { transform: translateY(0px); }
+        25% { transform: translateY(-4px); }
+        50% { transform: translateY(0px); }
+        75% { transform: translateY(-8px); }
+        100% { transform: translateY(0px); }
+      }
+      
+      /* 尾巴摆动 */
+      @keyframes tailWag {
+        0% { transform: rotate(-12deg); }
+        100% { transform: rotate(12deg); }
+      }
+      
+      /* 头部轻微摆动 */
+      @keyframes headBob {
+        0%, 100% { transform: translateY(0px) rotate(0deg); }
+        25% { transform: translateY(-2px) rotate(-2deg); }
+        50% { transform: translateY(0px) rotate(0deg); }
+        75% { transform: translateY(-1px) rotate(1deg); }
+      }
+      
+      /* 地面效果 - 像素风格 */
+      .ground {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 16px;
+        background: repeating-linear-gradient(
+          90deg,
+          #333 0px,
+          #333 8px,
+          #666 8px,
+          #666 16px
+        );
+        animation: groundMove 0.4s linear infinite;
+        image-rendering: pixelated;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: crisp-edges;
+      }
+      
+      @keyframes groundMove {
+        0% { background-position: 0 0; }
+        100% { background-position: 16px 0; }
+      }
+      
+      /* 品牌文字 */
+      .brand-text {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 24px;
+        font-weight: 600;
+        color: #333;
+        margin-top: 20px;
+        letter-spacing: 2px;
+      }
+      
+      /* 暗色主题适配 */
+      @media (prefers-color-scheme: dark) {
+        .first-loading-wrp {
+          background: #141414;
+        }
+        
+        .first-loading-wrp > h2 {
+          color: #fff;
+        }
+        
+        .brand-text {
+          color: #fff;
+        }
+        
+        .ground {
+          background: repeating-linear-gradient(
+            90deg,
+            #666 0px,
+            #666 8px,
+            #444 8px,
+            #444 16px
+          );
+        }
+      }
+      
+      /* 确保像素风格在所有浏览器中正确显示 */
+      .pixel-dog,
+      .dog-head,
+      .dog-body,
+      .dog-leg-front-left,
+      .dog-leg-front-right,
+      .dog-leg-back-left,
+      .dog-leg-back-right,
+      .dog-tail,
+      .dog-ear-left,
+      .dog-ear-right,
+      .dog-eye-left,
+      .dog-eye-right,
+      .dog-nose {
+        image-rendering: -moz-crisp-edges;
+        image-rendering: -webkit-crisp-edges;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+      
+      /* 手机端适配 */
+      @media (max-width: 768px) {
+        .pixel-dog-container {
+          transform: scale(1.2);
+        }
+        
+        .first-loading-wrp > h2 {
+          font-size: 24px;
+          margin-bottom: 30px;
+        }
+        
+        .brand-text {
+          font-size: 20px;
+        }
+      }
+    </style>
+    <!-- require cdn assets css -->
+    <% for (var i in htmlWebpackPlugin.options.cdn && htmlWebpackPlugin.options.cdn.css) { %>
+    <link rel="stylesheet" href="<%= htmlWebpackPlugin.options.cdn.css[i] %>" />
+    <% } %>
+  </head>
+  <body>
+    <noscript>
+      <strong>We're sorry but vue-antd-pro doesn't work properly without JavaScript enabled. Please enable it to continue.</strong>
+    </noscript>
+    <div id="app">
+      <div class="first-loading-wrp">
+        <h2>Landing</h2>
+        <div class="loading-wrp">
+          <div class="pixel-dog-container">
+            <div class="ground"></div>
+            <div class="pixel-dog">
+              <div class="dog-head">
+                <div class="dog-ear-left"></div>
+                <div class="dog-ear-right"></div>
+                <div class="dog-eye-left"></div>
+                <div class="dog-eye-right"></div>
+                <div class="dog-nose"></div>
+              </div>
+              <div class="dog-body"></div>
+              <div class="dog-leg-front-left"></div>
+              <div class="dog-leg-front-right"></div>
+              <div class="dog-leg-back-left"></div>
+              <div class="dog-leg-back-right"></div>
+              <div class="dog-tail"></div>
+            </div>
+          </div>
+        </div>
+        <div class="brand-text">QuantDinger</div>
+      </div>
+    </div>
+    <!-- require cdn assets js -->
+    <% for (var i in htmlWebpackPlugin.options.cdn && htmlWebpackPlugin.options.cdn.js) { %>
+    <script type="text/javascript" src="<%= htmlWebpackPlugin.options.cdn.js[i] %>"></script>
+    <% } %>
+    <!-- built files will be auto injected -->
+  </body>
+</html>

@@ -1,0 +1,590 @@
+"""
+交易策略 API 路由
+"""
+from flask import Blueprint, request, jsonify
+import traceback
+import time
+
+from app.services.strategy import StrategyService
+from app.services.strategy_compiler import StrategyCompiler
+from app.services.backtest import BacktestService
+from app import get_trading_executor
+from app.utils.logger import get_logger
+from app.utils.db import get_db_connection
+from app.data_sources import DataSourceFactory
+
+logger = get_logger(__name__)
+
+strategy_bp = Blueprint('strategy', __name__)
+
+# Local mode: avoid heavy initialization during module import.
+# Instantiate services lazily on first use to keep startup clean.
+_strategy_service = None
+
+def get_strategy_service() -> StrategyService:
+    global _strategy_service
+    if _strategy_service is None:
+        _strategy_service = StrategyService()
+    return _strategy_service
+
+
+@strategy_bp.route('/strategies', methods=['GET'])
+def list_strategies():
+    """
+    策略列表（本地版：单用户）
+    """
+    try:
+        user_id = request.args.get('user_id', type=int) or 1
+        items = get_strategy_service().list_strategies(user_id=user_id)
+        return jsonify({'code': 1, 'msg': 'success', 'data': {'strategies': items}})
+    except Exception as e:
+        logger.error(f"list_strategies failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': {'strategies': []}}), 500
+
+
+@strategy_bp.route('/strategies/detail', methods=['GET'])
+def get_strategy_detail():
+    try:
+        strategy_id = request.args.get('id', type=int)
+        if not strategy_id:
+            return jsonify({'code': 0, 'msg': '缺少策略ID参数', 'data': None}), 400
+        st = get_strategy_service().get_strategy(strategy_id)
+        if not st:
+            return jsonify({'code': 0, 'msg': '策略不存在', 'data': None}), 404
+        return jsonify({'code': 1, 'msg': 'success', 'data': st})
+    except Exception as e:
+        logger.error(f"get_strategy_detail failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+@strategy_bp.route('/strategies/create', methods=['POST'])
+def create_strategy():
+    try:
+        payload = request.get_json() or {}
+        # Local mode default user
+        payload['user_id'] = int(payload.get('user_id') or 1)
+        payload['strategy_type'] = payload.get('strategy_type') or 'IndicatorStrategy'
+        new_id = get_strategy_service().create_strategy(payload)
+        return jsonify({'code': 1, 'msg': 'success', 'data': {'id': new_id}})
+    except Exception as e:
+        logger.error(f"create_strategy failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+@strategy_bp.route('/strategies/update', methods=['PUT'])
+def update_strategy():
+    try:
+        strategy_id = request.args.get('id', type=int)
+        if not strategy_id:
+            return jsonify({'code': 0, 'msg': '缺少策略ID参数', 'data': None}), 400
+        payload = request.get_json() or {}
+        ok = get_strategy_service().update_strategy(strategy_id, payload)
+        if not ok:
+            return jsonify({'code': 0, 'msg': '策略不存在', 'data': None}), 404
+        return jsonify({'code': 1, 'msg': 'success', 'data': None})
+    except Exception as e:
+        logger.error(f"update_strategy failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+@strategy_bp.route('/strategies/delete', methods=['DELETE'])
+def delete_strategy():
+    try:
+        strategy_id = request.args.get('id', type=int)
+        if not strategy_id:
+            return jsonify({'code': 0, 'msg': '缺少策略ID参数', 'data': None}), 400
+        ok = get_strategy_service().delete_strategy(strategy_id)
+        return jsonify({'code': 1 if ok else 0, 'msg': 'success' if ok else 'failed', 'data': None})
+    except Exception as e:
+        logger.error(f"delete_strategy failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+
+
+@strategy_bp.route('/strategies/trades', methods=['GET'])
+def get_trades():
+    """交易记录（从本地 SQLite 读取）"""
+    try:
+        strategy_id = request.args.get('id', type=int)
+        if not strategy_id:
+            return jsonify({'code': 0, 'msg': '缺少策略ID参数', 'data': {'trades': [], 'items': []}}), 400
+        with get_db_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                """
+                SELECT id, strategy_id, symbol, type, price, amount, value, commission, profit, created_at
+                FROM qd_strategy_trades
+                WHERE strategy_id = ?
+                ORDER BY id DESC
+                """,
+                (strategy_id,)
+            )
+            rows = cur.fetchall() or []
+            cur.close()
+        # Frontend expects data.trades; keep data.items for compatibility with list-style components.
+        return jsonify({'code': 1, 'msg': 'success', 'data': {'trades': rows, 'items': rows}})
+    except Exception as e:
+        logger.error(f"get_trades failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': {'trades': [], 'items': []}}), 500
+
+
+@strategy_bp.route('/strategies/positions', methods=['GET'])
+def get_positions():
+    """持仓记录（从本地 SQLite 读取）"""
+    try:
+        strategy_id = request.args.get('id', type=int)
+        if not strategy_id:
+            return jsonify({'code': 0, 'msg': '缺少策略ID参数', 'data': {'positions': [], 'items': []}}), 400
+        with get_db_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                """
+                SELECT id, strategy_id, symbol, side, size, entry_price, current_price, highest_price,
+                       unrealized_pnl, pnl_percent, equity, updated_at
+                FROM qd_strategy_positions
+                WHERE strategy_id = ?
+                ORDER BY id DESC
+                """,
+                (strategy_id,)
+            )
+            rows = cur.fetchall() or []
+            cur.close()
+
+        # Sync current price and PnL on read (frontend polls every few seconds).
+        def _calc_unrealized_pnl(side: str, entry_price: float, current_price: float, size: float) -> float:
+            ep = float(entry_price or 0.0)
+            cp = float(current_price or 0.0)
+            sz = float(size or 0.0)
+            if ep <= 0 or cp <= 0 or sz <= 0:
+                return 0.0
+            s = (side or "").strip().lower()
+            if s == "short":
+                return (ep - cp) * sz
+            return (cp - ep) * sz
+
+        def _calc_pnl_percent(entry_price: float, size: float, pnl: float) -> float:
+            ep = float(entry_price or 0.0)
+            sz = float(size or 0.0)
+            denom = ep * sz
+            if denom <= 0:
+                return 0.0
+            return float(pnl) / denom * 100.0
+
+        now = int(time.time())
+        # Fetch prices once per symbol to reduce API calls.
+        sym_to_price: Dict[str, float] = {}
+        ds = DataSourceFactory.get_source("Crypto")
+        for r in rows:
+            sym = (r.get("symbol") or "").strip()
+            if not sym:
+                continue
+            if sym in sym_to_price:
+                continue
+            try:
+                t = ds.get_ticker(sym) or {}
+                px = float(t.get("last") or t.get("close") or 0.0)
+                if px > 0:
+                    sym_to_price[sym] = px
+            except Exception:
+                continue
+
+        # Apply to rows and persist best-effort
+        out = []
+        with get_db_connection() as db:
+            cur = db.cursor()
+            for r in rows:
+                sym = (r.get("symbol") or "").strip()
+                side = (r.get("side") or "").strip().lower()
+                entry = float(r.get("entry_price") or 0.0)
+                size = float(r.get("size") or 0.0)
+                cp = float(sym_to_price.get(sym) or r.get("current_price") or 0.0)
+                pnl = _calc_unrealized_pnl(side, entry, cp, size)
+                pct = _calc_pnl_percent(entry, size, pnl)
+
+                rr = dict(r)
+                rr["current_price"] = float(cp or 0.0)
+                rr["unrealized_pnl"] = float(pnl)
+                rr["pnl_percent"] = float(pct)
+                rr["updated_at"] = now
+                out.append(rr)
+
+                try:
+                    cur.execute(
+                        """
+                        UPDATE qd_strategy_positions
+                        SET current_price = ?, unrealized_pnl = ?, pnl_percent = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (float(cp or 0.0), float(pnl), float(pct), int(now), int(rr.get("id"))),
+                    )
+                except Exception:
+                    pass
+            db.commit()
+            cur.close()
+
+        return jsonify({'code': 1, 'msg': 'success', 'data': {'positions': out, 'items': out}})
+    except Exception as e:
+        logger.error(f"get_positions failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': {'positions': [], 'items': []}}), 500
+
+
+@strategy_bp.route('/strategies/equityCurve', methods=['GET'])
+def get_equity_curve():
+    """净值曲线（本地简单计算：initial_capital + 累计 profit）"""
+    try:
+        strategy_id = request.args.get('id', type=int)
+        if not strategy_id:
+            return jsonify({'code': 0, 'msg': '缺少策略ID参数', 'data': []}), 400
+
+        st = get_strategy_service().get_strategy(strategy_id) or {}
+        initial = float(st.get('initial_capital') or (st.get('trading_config') or {}).get('initial_capital') or 0)
+        if initial <= 0:
+            initial = 1000.0
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                """
+                SELECT created_at, profit
+                FROM qd_strategy_trades
+                WHERE strategy_id = ?
+                ORDER BY created_at ASC
+                """,
+                (strategy_id,)
+            )
+            rows = cur.fetchall() or []
+            cur.close()
+
+        equity = initial
+        curve = []
+        for r in rows:
+            try:
+                equity += float(r.get('profit') or 0)
+            except Exception:
+                pass
+            ts = int(r.get('created_at') or time.time())
+            curve.append({'time': ts, 'equity': equity})
+
+        return jsonify({'code': 1, 'msg': 'success', 'data': curve})
+    except Exception as e:
+        logger.error(f"get_equity_curve failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': []}), 500
+
+
+
+
+
+@strategy_bp.route('/strategies/stop', methods=['POST'])
+def stop_strategy():
+    """
+    停止策略
+    
+    参数:
+        id: 策略ID
+    """
+    try:
+        strategy_id = request.args.get('id', type=int)
+        
+        if not strategy_id:
+            return jsonify({
+                'code': 0,
+                'msg': '缺少策略ID参数',
+                'data': None
+            }), 400
+        
+        # 获取策略类型
+        strategy_type = get_strategy_service().get_strategy_type(strategy_id)
+        
+        # Local backend: AI strategy executor was removed. Only indicator strategies are supported.
+        if strategy_type == 'PromptBasedStrategy':
+            return jsonify({'code': 0, 'msg': 'AI策略已移除，本地版不支持启动/停止 AI 策略', 'data': None}), 400
+
+        # 指标策略
+        get_trading_executor().stop_strategy(strategy_id)
+        
+        # 更新策略状态
+        get_strategy_service().update_strategy_status(strategy_id, 'stopped')
+        
+        return jsonify({
+            'code': 1,
+            'msg': '停止成功',
+            'data': None
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to stop strategy: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'code': 0,
+            'msg': f'停止策略失败: {str(e)}',
+            'data': None
+        }), 500
+
+
+@strategy_bp.route('/strategies/start', methods=['POST'])
+def start_strategy():
+    """
+    启动策略
+    
+    参数:
+        id: 策略ID
+    """
+    try:
+        strategy_id = request.args.get('id', type=int)
+        
+        if not strategy_id:
+            return jsonify({
+                'code': 0,
+                'msg': '缺少策略ID参数',
+                'data': None
+            }), 400
+        
+        # 获取策略类型
+        strategy_type = get_strategy_service().get_strategy_type(strategy_id)
+        
+        # 更新策略状态
+        get_strategy_service().update_strategy_status(strategy_id, 'running')
+        
+        # Local backend: AI strategy executor was removed. Only indicator strategies are supported.
+        if strategy_type == 'PromptBasedStrategy':
+            return jsonify({'code': 0, 'msg': 'AI策略已移除，本地版不支持启动 AI 策略', 'data': None}), 400
+
+        # 指标策略
+        success = get_trading_executor().start_strategy(strategy_id)
+        
+        if not success:
+            # 如果启动失败，恢复状态
+            get_strategy_service().update_strategy_status(strategy_id, 'stopped')
+            return jsonify({
+                'code': 0,
+                'msg': '启动策略执行器失败',
+                'data': None
+            }), 500
+        
+        return jsonify({
+            'code': 1,
+            'msg': '启动成功',
+            'data': None
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to start strategy: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'code': 0,
+            'msg': f'启动策略失败: {str(e)}',
+            'data': None
+        }), 500
+
+
+@strategy_bp.route('/strategies/test-connection', methods=['POST'])
+def test_connection():
+    """
+    测试交易所连接
+    
+    请求体:
+        exchange_config: 交易所配置
+    """
+    try:
+        data = request.get_json() or {}
+        
+        # 记录请求数据（用于调试，但不记录敏感信息）
+        logger.debug(f"Connection test request keys: {list(data.keys())}")
+        
+        # 获取交易所配置
+        exchange_config = data.get('exchange_config', data)
+        
+        # Local deployment: no encryption/decryption; accept dict or JSON string.
+        if isinstance(exchange_config, str):
+            try:
+                import json
+                exchange_config = json.loads(exchange_config)
+            except Exception:
+                pass
+        
+        # 验证 exchange_config 是否为字典
+        if not isinstance(exchange_config, dict):
+            logger.error(f"Invalid exchange_config type: {type(exchange_config)}, data: {str(exchange_config)[:200]}")
+            # Frontend expects HTTP 200 with {code:0} for business failures.
+            return jsonify({'code': 0, 'msg': '交易所配置格式错误，请检查数据格式', 'data': None})
+        
+        # 验证必要字段
+        if not exchange_config.get('exchange_id'):
+            return jsonify({'code': 0, 'msg': '请选择交易所', 'data': None})
+        
+        api_key = exchange_config.get('api_key', '')
+        secret_key = exchange_config.get('secret_key', '')
+        
+        # 详细日志排查
+        logger.info(f"Testing connection: exchange_id={exchange_config.get('exchange_id')}")
+        logger.info(f"API Key: {api_key[:5]}... (len={len(api_key)})")
+        logger.info(f"Secret Key: {secret_key[:5]}... (len={len(secret_key)})")
+        
+        # 检查是否有特殊字符
+        if api_key.strip() != api_key:
+            logger.warning("API key contains leading/trailing whitespace")
+        if secret_key.strip() != secret_key:
+            logger.warning("Secret key contains leading/trailing whitespace")
+            
+        if not api_key or not secret_key:
+            return jsonify({'code': 0, 'msg': '请填写API密钥和Secret密钥', 'data': None})
+        
+        result = get_strategy_service().test_exchange_connection(exchange_config)
+        
+        if result['success']:
+            return jsonify({'code': 1, 'msg': result.get('message') or '连接成功', 'data': result.get('data')})
+        # Always return HTTP 200 for business-level failures.
+        return jsonify({'code': 0, 'msg': result.get('message') or '连接失败', 'data': result.get('data')})
+        
+    except Exception as e:
+        logger.error(f"Connection test failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'code': 0,
+            'msg': f'测试连接失败: {str(e)}',
+            'data': None
+        }), 500
+
+
+@strategy_bp.route('/strategies/get-symbols', methods=['POST'])
+def get_symbols():
+    """
+    获取交易所交易对列表
+    
+    请求体:
+        exchange_config: 交易所配置
+    """
+    try:
+        data = request.get_json() or {}
+        exchange_config = data.get('exchange_config', data)
+        
+        result = get_strategy_service().get_exchange_symbols(exchange_config)
+        
+        if result['success']:
+            return jsonify({
+                'code': 1,
+                'msg': result['message'],
+                'data': {
+                    'symbols': result['symbols']
+                }
+            })
+        else:
+            return jsonify({
+                'code': 0,
+                'msg': result['message'],
+                'data': {
+                    'symbols': []
+                }
+            })
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch symbols: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'code': 0,
+            'msg': f'获取交易对失败: {str(e)}',
+            'data': {
+                'symbols': []
+            }
+        }), 500
+
+
+@strategy_bp.route('/strategies/preview-compile', methods=['POST'])
+def preview_compile():
+    """
+    预览编译后的策略结果
+    """
+    try:
+        data = request.get_json() or {}
+        # strategy_config is passed as 'config'
+        config = data.get('config')
+        
+        if not config:
+             return jsonify({'code': 0, 'msg': 'Missing config'}), 400
+
+        # Compile
+        compiler = StrategyCompiler()
+        try:
+            code = compiler.compile(config)
+        except Exception as e:
+            return jsonify({'code': 0, 'msg': f'Compilation failed: {str(e)}'}), 400
+        
+        # Execute
+        symbol = config.get('symbol', 'BTC/USDT')
+        timeframe = config.get('timeframe', '4h')
+        
+        backtest_service = BacktestService()
+        result = backtest_service.run_code_strategy(
+            code=code,
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=500 
+        )
+        
+        if result.get('error'):
+             return jsonify({'code': 0, 'msg': f"Execution failed: {result['error']}"}), 400
+
+        return jsonify({
+            'code': 1,
+            'msg': 'Success',
+            'data': result
+        })
+        
+    except Exception as e:
+        logger.error(f"Preview failed: {e}")
+        return jsonify({'code': 0, 'msg': str(e)}), 500
+
+
+@strategy_bp.route('/strategies/notifications', methods=['GET'])
+def get_strategy_notifications():
+    """
+    Strategy signal notifications (browser channel persistence).
+
+    Query:
+      - id: strategy id (optional)
+      - limit: default 50, max 200
+      - since_id: return rows with id > since_id (optional)
+    """
+    try:
+        strategy_id = request.args.get('id', type=int)
+        limit = request.args.get('limit', type=int) or 50
+        limit = max(1, min(200, int(limit)))
+        since_id = request.args.get('since_id', type=int) or 0
+
+        where = []
+        args = []
+        if strategy_id:
+            where.append("strategy_id = ?")
+            args.append(int(strategy_id))
+        if since_id:
+            where.append("id > ?")
+            args.append(int(since_id))
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+        with get_db_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                f"""
+                SELECT *
+                FROM qd_strategy_notifications
+                {where_sql}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(args + [int(limit)]),
+            )
+            rows = cur.fetchall() or []
+            cur.close()
+
+        return jsonify({'code': 1, 'msg': 'success', 'data': {'items': rows}})
+    except Exception as e:
+        logger.error(f"get_strategy_notifications failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': {'items': []}}), 500

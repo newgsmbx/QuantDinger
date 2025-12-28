@@ -1,0 +1,3616 @@
+<template>
+  <div class="trading-assistant" :class="{ 'theme-dark': isDarkTheme }">
+    <a-row :gutter="24" class="strategy-layout">
+      <!-- 左侧：策略列表 -->
+      <a-col
+        :xs="24"
+        :sm="24"
+        :md="10"
+        :lg="8"
+        :xl="8"
+        class="strategy-list-col">
+        <a-card :bordered="false" class="strategy-list-card">
+          <div slot="title" class="card-title">
+            <span>{{ $t('trading-assistant.strategyList') }}</span>
+            <a-button type="primary" size="small" @click="handleCreateStrategy">
+              <a-icon type="plus" />
+              {{ $t('trading-assistant.createStrategy') }}
+            </a-button>
+          </div>
+
+          <a-spin :spinning="loading">
+            <a-empty v-if="!loading && strategies.length === 0" :description="$t('trading-assistant.noStrategy')" />
+            <a-list
+              v-else
+              :data-source="strategies"
+              size="small"
+            >
+              <a-list-item
+                slot="renderItem"
+                slot-scope="item"
+                :class="['strategy-list-item', { active: selectedStrategy && selectedStrategy.id === item.id }]"
+                @click="handleSelectStrategy(item)"
+              >
+                <a-list-item-meta>
+                  <template slot="title">
+                    <div class="strategy-item-header">
+                      <div class="strategy-name-wrapper">
+                        <a-tag
+                          v-if="item.exchange_config && item.exchange_config.exchange_id"
+                          :color="getExchangeTagColor(item.exchange_config.exchange_id)"
+                          size="small"
+                          class="exchange-tag"
+                        >
+                          <a-icon type="bank" style="margin-right: 4px;" />
+                          {{ getExchangeDisplayName(item.exchange_config.exchange_id) }}
+                        </a-tag>
+                        <span class="strategy-name">{{ item.strategy_name }}</span>
+                        <a-tag
+                          v-if="item.strategy_type === 'PromptBasedStrategy'"
+                          color="purple"
+                          size="small"
+                          class="strategy-type-tag"
+                        >
+                          <a-icon type="robot" style="margin-right: 2px;" />
+                          AI
+                        </a-tag>
+                      </div>
+                    </div>
+                  </template>
+                  <template slot="description">
+                    <div class="strategy-item-info">
+                      <!-- <span class="info-item">
+                        <a-icon type="line-chart" />
+                        {{ getStrategyTypeText(item.strategy_type) }}
+                      </span> -->
+                      <span class="info-item" v-if="item.trading_config && item.trading_config.symbol">
+                        <a-icon type="dollar" />
+                        {{ item.trading_config.symbol }}
+                      </span>
+                      <span
+                        class="status-label"
+                        :class="[
+                          item.status ? `status-${item.status}` : '',
+                          { 'status-stopped': item.status === 'stopped' }
+                        ]"
+                      >
+                        {{ getStatusText(item.status) }}
+                      </span>
+                    </div>
+                  </template>
+                </a-list-item-meta>
+                <template slot="actions">
+                  <a-dropdown
+                    :getPopupContainer="getDropdownContainer"
+                    :trigger="['click']">
+                    <a-menu slot="overlay" @click="({ key }) => handleMenuClick(key, item)">
+                      <a-menu-item v-if="item.status === 'stopped'" key="start">
+                        <a-icon type="play-circle" />
+                        {{ $t('trading-assistant.startStrategy') }}
+                      </a-menu-item>
+                      <a-menu-item v-if="item.status === 'running'" key="stop">
+                        <a-icon type="pause-circle" />
+                        {{ $t('trading-assistant.stopStrategy') }}
+                      </a-menu-item>
+                      <a-menu-divider />
+                      <a-menu-item key="edit">
+                        <a-icon type="edit" />
+                        {{ $t('trading-assistant.editStrategy') }}
+                      </a-menu-item>
+                      <a-menu-divider />
+                      <a-menu-item key="delete" class="danger-item">
+                        <a-icon type="delete" />
+                        {{ $t('trading-assistant.deleteStrategy') }}
+                      </a-menu-item>
+                    </a-menu>
+                    <a-button type="link" icon="more" size="small" />
+                  </a-dropdown>
+                </template>
+              </a-list-item>
+            </a-list>
+          </a-spin>
+        </a-card>
+      </a-col>
+
+      <!-- 右侧：策略详情和交易记录 -->
+      <a-col
+        :xs="24"
+        :sm="24"
+        :md="14"
+        :lg="16"
+        :xl="16"
+        class="strategy-detail-col">
+        <div v-if="!selectedStrategy" class="empty-detail">
+          <a-empty :description="$t('trading-assistant.selectStrategy')" />
+        </div>
+
+        <div v-else class="strategy-detail-panel">
+          <!-- 策略头部信息 -->
+          <a-card :bordered="false" class="strategy-header-card">
+            <div class="strategy-header">
+              <div class="header-left">
+                <h3 class="strategy-title">{{ selectedStrategy.strategy_name }}</h3>
+                <div class="strategy-meta">
+                  <a-tag
+                    :color="getStatusColor(selectedStrategy.status)"
+                    :class="{ 'status-stopped': selectedStrategy.status === 'stopped' }"
+                  >
+                    {{ getStatusText(selectedStrategy.status) }}
+                  </a-tag>
+                  <!-- <a-tag>{{ getStrategyTypeText(selectedStrategy.strategy_type) }}</a-tag> -->
+                  <span class="meta-item" v-if="selectedStrategy.indicator_config && selectedStrategy.indicator_config.indicator_name">
+                    <a-icon type="line-chart" />
+                    {{ $t('trading-assistant.detail.indicatorName') }}: {{ selectedStrategy.indicator_config.indicator_name }}
+                  </span>
+                  <span class="meta-item" v-if="selectedStrategy.trading_config">
+                    <a-icon type="dollar" />
+                    {{ selectedStrategy.trading_config.symbol }}
+                  </span>
+                  <span class="meta-item" v-if="selectedStrategy.trading_config">
+                    <a-icon type="percentage" />
+                    {{ $t('trading-assistant.form.leverage') }}: {{ selectedStrategy.trading_config.leverage || 1 }}x
+                  </span>
+                  <span class="meta-item" v-if="selectedStrategy.trading_config && selectedStrategy.trading_config.trade_direction">
+                    <a-icon type="swap" />
+                    {{ $t('trading-assistant.form.tradeDirection') }}: {{ getTradeDirectionText(selectedStrategy.trading_config.trade_direction) }}
+                  </span>
+                  <span class="meta-item" v-if="selectedStrategy.trading_config && selectedStrategy.trading_config.timeframe">
+                    <a-icon type="clock-circle" />
+                    {{ $t('trading-assistant.form.klinePeriod') }}: {{ selectedStrategy.trading_config.timeframe }}
+                  </span>
+                  <span class="meta-item" v-if="selectedStrategy.initial_capital || (selectedStrategy.trading_config && selectedStrategy.trading_config.initial_capital)">
+                    <a-icon type="dollar" />
+                    {{ $t('trading-assistant.detail.totalInvestment') }}: ${{ ((selectedStrategy.initial_capital || selectedStrategy.trading_config?.initial_capital) || 0).toLocaleString() }}
+                  </span>
+                  <!-- 新增当前净值 -->
+                  <span class="meta-item" v-if="currentEquity !== null">
+                    <a-icon type="money-collect" />
+                    {{ $t('trading-assistant.detail.currentEquity') }}: <span :class="getEquityColorClass">{{ formatCurrency(currentEquity) }}</span>
+                  </span>
+                  <!-- 新增总盈亏 -->
+                  <span class="meta-item" v-if="totalPnl !== null">
+                    <a-icon type="rise" />
+                    {{ $t('trading-assistant.detail.totalPnl') }}: <span :class="getPnlColorClass">{{ formatPnl(totalPnl) }} ({{ formatPnlPercent(totalPnlPercent) }})</span>
+                  </span>
+                </div>
+              </div>
+              <div class="header-right">
+                <a-button
+                  v-if="selectedStrategy.status === 'stopped'"
+                  type="primary"
+                  size="large"
+                  @click="handleStartStrategy(selectedStrategy.id)"
+                >
+                  <a-icon type="play-circle" />
+                  {{ $t('trading-assistant.startStrategy') }}
+                </a-button>
+                <a-button
+                  v-if="selectedStrategy.status === 'running'"
+                  type="danger"
+                  size="large"
+                  @click="handleStopStrategy(selectedStrategy.id)"
+                >
+                  <a-icon type="pause-circle" />
+                  {{ $t('trading-assistant.stopStrategy') }}
+                </a-button>
+              </div>
+            </div>
+          </a-card>
+
+          <!-- 策略详情标签页 -->
+          <a-card :bordered="false" class="strategy-content-card">
+            <a-tabs defaultActiveKey="positions">
+              <a-tab-pane key="positions" :tab="$t('trading-assistant.tabs.positions')">
+                <position-records
+                  :strategy-id="selectedStrategy.id"
+                  :market-type="(selectedStrategy.trading_config && selectedStrategy.trading_config.market_type) || 'swap'"
+                  :leverage="(selectedStrategy.trading_config && selectedStrategy.trading_config.leverage) || 1"
+                  :loading="loadingRecords"
+                />
+              </a-tab-pane>
+              <a-tab-pane key="trades" :tab="$t('trading-assistant.tabs.tradingRecords')">
+                <trading-records
+                  :strategy-id="selectedStrategy.id"
+                  :loading="loadingRecords"
+                />
+              </a-tab-pane>
+            </a-tabs>
+          </a-card>
+        </div>
+      </a-col>
+    </a-row>
+
+    <!-- 创建/编辑策略弹窗 - 合并版本 -->
+    <a-modal
+      :visible="showFormModal"
+      :title="editingStrategy ? $t('trading-assistant.editStrategy') : $t('trading-assistant.createStrategy')"
+      :width="isMobile ? '95%' : 1100"
+      :confirmLoading="saving"
+      @ok="handleSubmit"
+      @cancel="handleCloseModal"
+      :maskClosable="false"
+      :wrapClassName="isMobile ? 'mobile-modal' : ''"
+      :bodyStyle="{ maxHeight: '70vh', overflowY: 'auto' }"
+    >
+      <a-spin :spinning="loadingIndicators">
+        <a-steps :current="currentStep" class="steps-container">
+          <a-step :title="$t('trading-assistant.form.step1')" />
+          <a-step :title="$t('trading-assistant.form.step2Params')" />
+          <a-step :title="$t('trading-assistant.form.step3Signal')" />
+        </a-steps>
+
+        <div class="form-container">
+          <!-- 步骤1: 指标策略-选择技术指标 / AI策略-基础配置 -->
+          <div v-show="currentStep === 0" class="step-content">
+            <!-- 指标策略：选择技术指标 -->
+            <div v-if="strategyType === 'indicator'">
+              <a-form :form="form" layout="vertical">
+                <a-form-item :label="$t('trading-assistant.form.indicator')">
+                  <a-select
+                    v-decorator="['indicator_id', { rules: [{ required: true, message: $t('trading-assistant.validation.indicatorRequired') }] }]"
+                    :placeholder="$t('trading-assistant.placeholders.selectIndicator')"
+                    show-search
+                    :filter-option="filterIndicatorOption"
+                    @focus="handleIndicatorSelectFocus"
+                    @change="handleIndicatorChange"
+                    :loading="loadingIndicators"
+                    :getPopupContainer="(triggerNode) => triggerNode.parentNode"
+                  >
+                    <a-select-option
+                      v-for="indicator in availableIndicators"
+                      :key="String(indicator.id)"
+                      :value="String(indicator.id)"
+                    >
+                      <div class="indicator-option">
+                        <span class="indicator-name">{{ indicator.name }}</span>
+                        <a-tag v-if="indicator.type" size="small" :color="getIndicatorTypeColor(indicator.type)">
+                          {{ getIndicatorTypeName(indicator.type) }}
+                        </a-tag>
+                      </div>
+                    </a-select-option>
+                  </a-select>
+                  <div class="form-item-hint">
+                    {{ $t('trading-assistant.form.indicatorHint') }}
+                  </div>
+                </a-form-item>
+
+                <a-form-item v-if="selectedIndicator" :label="$t('trading-assistant.form.indicatorDescription')">
+                  <div class="indicator-description">
+                    {{ selectedIndicator.description || $t('trading-assistant.form.noDescription') }}
+                  </div>
+                </a-form-item>
+
+                <a-divider />
+
+                <a-form-item :label="$t('trading-assistant.form.strategyName')">
+                  <a-input
+                    v-decorator="['strategy_name', { rules: [{ required: true, message: $t('trading-assistant.validation.strategyNameRequired') }] }]"
+                    :placeholder="$t('trading-assistant.placeholders.inputStrategyName')"
+                  />
+                </a-form-item>
+
+                <a-form-item :label="$t('trading-assistant.form.symbol')">
+                  <a-select
+                    v-decorator="['symbol', { rules: [{ required: true, message: $t('trading-assistant.validation.symbolRequired') }] }]"
+                    :placeholder="$t('trading-assistant.placeholders.selectSymbol')"
+                    show-search
+                    :filter-option="filterWatchlistOption"
+                    :loading="loadingWatchlist"
+                    @change="handleWatchlistSymbolChange"
+                    :getPopupContainer="(triggerNode) => triggerNode.parentNode"
+                  >
+                    <a-select-option
+                      v-for="item in watchlist"
+                      :key="`${item.market}:${item.symbol}`"
+                      :value="`${item.market}:${item.symbol}`"
+                    >
+                      <div class="symbol-option">
+                        <a-tag :color="getMarketColor(item.market)" style="margin-right: 8px; margin-bottom: 0;">
+                          {{ item.market }}
+                        </a-tag>
+                        <span class="symbol-name">{{ item.symbol }}</span>
+                        <span v-if="item.name" class="symbol-name-extra">{{ item.name }}</span>
+                      </div>
+                    </a-select-option>
+                  </a-select>
+                  <div class="form-item-hint">
+                    {{ $t('trading-assistant.form.symbolHintCrypto') }}
+                  </div>
+                </a-form-item>
+
+                <a-row :gutter="16">
+                  <a-col :xs="24" :sm="24" :md="12" :lg="12">
+                    <a-form-item :label="$t('trading-assistant.form.initialCapital')">
+                      <a-input-number
+                        v-decorator="['initial_capital', { rules: [{ required: true, message: $t('trading-assistant.validation.initialCapitalRequired') }], initialValue: 1000 }]"
+                        :min="10"
+                        :step="100"
+                        :precision="2"
+                        style="width: 100%"
+                      />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :sm="24" :md="12" :lg="12">
+                    <a-form-item :label="$t('trading-assistant.form.marketType')">
+                      <a-radio-group
+                        v-decorator="['market_type', { initialValue: 'swap' }]"
+                        @change="handleMarketTypeChange"
+                      >
+                        <a-radio value="swap">{{ $t('trading-assistant.form.marketTypeFutures') }}</a-radio>
+                        <a-radio value="spot">{{ $t('trading-assistant.form.marketTypeSpot') }}</a-radio>
+                      </a-radio-group>
+                      <div class="form-item-hint">
+                        {{ $t('trading-assistant.form.marketTypeHint') }}
+                      </div>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+
+                <a-row :gutter="16">
+                  <a-col :xs="24" :sm="24" :md="12" :lg="12">
+                    <a-form-item :label="`${$t('trading-assistant.form.leverage')} (x)`">
+                      <a-input-number
+                        v-decorator="['leverage', { initialValue: 1, rules: [{ required: true, message: $t('trading-assistant.validation.leverageRequired') }] }]"
+                        :min="1"
+                        :max="form.getFieldValue('market_type') === 'spot' ? 1 : 125"
+                        :step="1"
+                        style="width: 100%"
+                        :disabled="form.getFieldValue('market_type') === 'spot'"
+                      />
+                      <div class="form-item-hint">
+                        <span v-if="form.getFieldValue('market_type') === 'spot'">
+                          {{ $t('trading-assistant.form.spotLeverageFixed') }}
+                        </span>
+                        <span v-else>
+                          {{ $t('trading-assistant.form.leverageHint') }}
+                        </span>
+                      </div>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :sm="24" :md="12" :lg="12">
+                    <a-form-item :label="$t('trading-assistant.form.tradeDirection')">
+                      <a-radio-group
+                        v-decorator="['trade_direction', { initialValue: 'long' }]"
+                        :disabled="form.getFieldValue('market_type') === 'spot'"
+                      >
+                        <a-radio value="long">{{ $t('trading-assistant.form.tradeDirectionLong') }}</a-radio>
+                        <a-radio value="short" :disabled="form.getFieldValue('market_type') === 'spot'">
+                          {{ $t('trading-assistant.form.tradeDirectionShort') }}
+                        </a-radio>
+                        <a-radio value="both" :disabled="form.getFieldValue('market_type') === 'spot'">
+                          {{ $t('trading-assistant.form.tradeDirectionBoth') }}
+                        </a-radio>
+                      </a-radio-group>
+                      <div v-if="form.getFieldValue('market_type') === 'spot'" class="form-item-hint" style="color: #ff9800;">
+                        {{ $t('trading-assistant.form.spotOnlyLongHint') }}
+                      </div>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+
+                <a-row :gutter="16">
+                  <a-col :xs="24" :sm="24" :md="12" :lg="12">
+                    <a-form-item :label="$t('trading-assistant.form.klinePeriod')">
+                      <a-select
+                        v-decorator="['timeframe', { initialValue: '1H', rules: [{ required: true }] }]"
+                        :placeholder="$t('trading-assistant.placeholders.selectKlinePeriod')"
+                        :getPopupContainer="(triggerNode) => triggerNode.parentNode"
+                      >
+                        <a-select-option value="1m">{{ $t('trading-assistant.form.timeframe1m') }}</a-select-option>
+                        <a-select-option value="5m">{{ $t('trading-assistant.form.timeframe5m') }}</a-select-option>
+                        <a-select-option value="15m">{{ $t('trading-assistant.form.timeframe15m') }}</a-select-option>
+                        <a-select-option value="30m">{{ $t('trading-assistant.form.timeframe30m') }}</a-select-option>
+                        <a-select-option value="1H">{{ $t('trading-assistant.form.timeframe1H') }}</a-select-option>
+                        <a-select-option value="4H">{{ $t('trading-assistant.form.timeframe4H') }}</a-select-option>
+                        <a-select-option value="1D">{{ $t('trading-assistant.form.timeframe1D') }}</a-select-option>
+                      </a-select>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :sm="24" :md="12" :lg="12"></a-col>
+                </a-row>
+              </a-form>
+            </div>
+
+            <!-- Local mode: indicator strategy only (no AI strategy) -->
+          </div>
+
+          <!-- Step 2: params (backtest-like / trading params) -->
+          <div v-show="currentStep === 1" class="step-content">
+            <!-- 指标策略：策略参数 -->
+            <div v-if="strategyType === 'indicator'">
+              <a-form :form="form" layout="vertical">
+                <!-- Backtest-like configuration (aligned with indicator-analysis BacktestModal) -->
+                <a-collapse v-model="backtestCollapseKeys" :bordered="false" style="background: #fafafa;">
+                  <a-collapse-panel key="risk" :header="$t('dashboard.indicator.backtest.panel.risk')">
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.stopLossPct')">
+                          <a-input-number
+                            v-decorator="['stop_loss_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="100"
+                            :step="0.01"
+                            :precision="4"
+                            style="width: 220px"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.takeProfitPct')">
+                          <a-input-number
+                            v-decorator="['take_profit_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="1000"
+                            :step="0.01"
+                            :precision="4"
+                            style="width: 220px"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trailingEnabled')">
+                          <a-switch
+                            v-decorator="['trailing_enabled', { valuePropName: 'checked', initialValue: false }]"
+                            @change="onTrailingToggle"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12"></a-col>
+                    </a-row>
+
+                    <template v-if="trailingEnabledUi">
+                      <a-row :gutter="24">
+                        <a-col :span="12">
+                          <a-form-item :label="$t('dashboard.indicator.backtest.field.trailingStopPct')">
+                            <a-input-number
+                              v-decorator="['trailing_stop_pct', { initialValue: 0 }]"
+                              :min="0"
+                              :max="100"
+                              :step="0.01"
+                              :precision="4"
+                              style="width: 220px"
+                            />
+                          </a-form-item>
+                        </a-col>
+                        <a-col :span="12">
+                          <a-form-item :label="$t('dashboard.indicator.backtest.field.trailingActivationPct')">
+                            <a-input-number
+                              v-decorator="['trailing_activation_pct', { initialValue: 0 }]"
+                              :min="0"
+                              :max="1000"
+                              :step="0.01"
+                              :precision="4"
+                              style="width: 220px"
+                            />
+                          </a-form-item>
+                        </a-col>
+                      </a-row>
+                    </template>
+                  </a-collapse-panel>
+
+                  <a-collapse-panel key="scale" :header="$t('dashboard.indicator.backtest.panel.scale')">
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendAddEnabled')">
+                          <a-switch
+                            v-decorator="['trend_add_enabled', { valuePropName: 'checked', initialValue: false }]"
+                            @change="onTrendAddToggle"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.dcaAddEnabled')">
+                          <a-switch
+                            v-decorator="['dca_add_enabled', { valuePropName: 'checked', initialValue: false }]"
+                            @change="onDcaAddToggle"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendAddStepPct')">
+                          <a-input-number
+                            v-decorator="['trend_add_step_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="1000"
+                            :step="0.01"
+                            :precision="4"
+                            style="width: 220px"
+                            @change="onScaleParamsChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.dcaAddStepPct')">
+                          <a-input-number
+                            v-decorator="['dca_add_step_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="1000"
+                            :step="0.01"
+                            :precision="4"
+                            style="width: 220px"
+                            @change="onScaleParamsChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendAddSizePct')">
+                          <a-input-number
+                            v-decorator="['trend_add_size_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="100"
+                            :step="0.1"
+                            :precision="4"
+                            style="width: 220px"
+                            @change="onScaleParamsChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.dcaAddSizePct')">
+                          <a-input-number
+                            v-decorator="['dca_add_size_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="100"
+                            :step="0.1"
+                            :precision="4"
+                            style="width: 220px"
+                            @change="onScaleParamsChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendAddMaxTimes')">
+                          <a-input-number
+                            v-decorator="['trend_add_max_times', { initialValue: 0 }]"
+                            :min="0"
+                            :max="50"
+                            :step="1"
+                            :precision="0"
+                            style="width: 220px"
+                            @change="onScaleParamsChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.dcaAddMaxTimes')">
+                          <a-input-number
+                            v-decorator="['dca_add_max_times', { initialValue: 0 }]"
+                            :min="0"
+                            :max="50"
+                            :step="1"
+                            :precision="0"
+                            style="width: 220px"
+                            @change="onScaleParamsChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                  </a-collapse-panel>
+
+                  <a-collapse-panel key="reduce" :header="$t('dashboard.indicator.backtest.panel.reduce')">
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendReduceEnabled')">
+                          <a-switch v-decorator="['trend_reduce_enabled', { valuePropName: 'checked', initialValue: false }]" />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.adverseReduceEnabled')">
+                          <a-switch v-decorator="['adverse_reduce_enabled', { valuePropName: 'checked', initialValue: false }]" />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendReduceStepPct')">
+                          <a-input-number
+                            v-decorator="['trend_reduce_step_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="1000"
+                            :step="0.01"
+                            :precision="4"
+                            style="width: 220px"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.adverseReduceStepPct')">
+                          <a-input-number
+                            v-decorator="['adverse_reduce_step_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="1000"
+                            :step="0.01"
+                            :precision="4"
+                            style="width: 220px"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendReduceSizePct')">
+                          <a-input-number
+                            v-decorator="['trend_reduce_size_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="100"
+                            :step="0.1"
+                            :precision="4"
+                            style="width: 220px"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.adverseReduceSizePct')">
+                          <a-input-number
+                            v-decorator="['adverse_reduce_size_pct', { initialValue: 0 }]"
+                            :min="0"
+                            :max="100"
+                            :step="0.1"
+                            :precision="4"
+                            style="width: 220px"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.trendReduceMaxTimes')">
+                          <a-input-number
+                            v-decorator="['trend_reduce_max_times', { initialValue: 0 }]"
+                            :min="0"
+                            :max="50"
+                            :step="1"
+                            :precision="0"
+                            style="width: 100%"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item :label="$t('dashboard.indicator.backtest.field.adverseReduceMaxTimes')">
+                          <a-input-number
+                            v-decorator="['adverse_reduce_max_times', { initialValue: 0 }]"
+                            :min="0"
+                            :max="50"
+                            :step="1"
+                            :precision="0"
+                            style="width: 100%"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                  </a-collapse-panel>
+
+                  <a-collapse-panel key="position" :header="$t('dashboard.indicator.backtest.panel.position')">
+                    <a-row :gutter="24">
+                      <a-col :span="12">
+                        <a-form-item
+                          :label="$t('dashboard.indicator.backtest.field.entryPct')"
+                          :help="$t('dashboard.indicator.backtest.hint.entryPctMax', { maxPct: Number(entryPctMaxUi || 0).toFixed(0) })"
+                        >
+                          <a-input-number
+                            v-decorator="['entry_pct', { initialValue: 100 }]"
+                            :min="0"
+                            :max="entryPctMaxUi"
+                            :step="0.1"
+                            :precision="4"
+                            style="width: 220px"
+                            @change="onEntryPctChange"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12"></a-col>
+                    </a-row>
+                  </a-collapse-panel>
+                </a-collapse>
+
+                <!-- Indicator strategy: AI decision filter -->
+                <div class="ai-filter-box">
+                  <div class="ai-filter-header">
+                    <div class="ai-filter-title">
+                      <a-icon type="robot" />
+                      <span>{{ $t('trading-assistant.form.enableAiFilter') }}</span>
+                    </div>
+                    <a-switch
+                      :checked="aiFilterEnabledUi"
+                      @change="onAiFilterToggle"
+                    />
+                  </div>
+                  <div class="ai-filter-hint">{{ $t('trading-assistant.form.enableAiFilterHint') }}</div>
+
+                  <div v-show="aiFilterEnabledUi" class="ai-filter-body">
+                    <div class="ai-filter-prompt-label">{{ $t('trading-assistant.form.aiFilterPrompt') }}</div>
+                    <a-textarea
+                      v-model="aiFilterPromptUi"
+                      :rows="4"
+                      :placeholder="$t('trading-assistant.placeholders.inputAiFilterPrompt')"
+                      @input="onAiFilterPromptInput"
+                    />
+                    <div class="ai-filter-prompt-hint">{{ $t('trading-assistant.form.aiFilterPromptHint') }}</div>
+                  </div>
+                </div>
+              </a-form>
+            </div>
+
+            <!-- Local mode: indicator strategy only (no AI strategy) -->
+          </div>
+
+          <!-- Step 3: signal push & optional live trading (crypto only) -->
+          <div v-show="currentStep === 2" class="step-content">
+            <a-form :form="form" layout="vertical" autocomplete="off">
+              <a-form-item :label="$t('trading-assistant.form.executionMode')">
+                <a-radio-group
+                  v-decorator="['execution_mode', { initialValue: 'signal' }]"
+                  :disabled="!isCryptoMarket"
+                  @change="onExecutionModeChange"
+                >
+                  <a-radio value="signal">{{ $t('trading-assistant.form.executionModeSignal') }}</a-radio>
+                  <a-radio value="live" :disabled="!isCryptoMarket">{{ $t('trading-assistant.form.executionModeLive') }}</a-radio>
+                </a-radio-group>
+                <div v-if="!isCryptoMarket" class="form-item-hint" style="color: #ff9800;">
+                  {{ $t('trading-assistant.form.liveTradingCryptoOnlyHint') }}
+                </div>
+              </a-form-item>
+
+              <a-form-item :label="$t('trading-assistant.form.notifyChannels')">
+                <a-checkbox-group
+                  v-decorator="['notify_channels', { initialValue: ['browser'] }]"
+                  @change="onNotifyChannelsChange"
+                >
+                  <a-checkbox value="browser">{{ $t('trading-assistant.notify.browser') }}</a-checkbox>
+                  <a-checkbox value="email">{{ $t('trading-assistant.notify.email') }}</a-checkbox>
+                  <a-checkbox value="phone">{{ $t('trading-assistant.notify.phone') }}</a-checkbox>
+                  <a-checkbox value="telegram">{{ $t('trading-assistant.notify.telegram') }}</a-checkbox>
+                  <a-checkbox value="discord">{{ $t('trading-assistant.notify.discord') }}</a-checkbox>
+                  <a-checkbox value="webhook">{{ $t('trading-assistant.notify.webhook') }}</a-checkbox>
+                </a-checkbox-group>
+                <div class="form-item-hint">{{ $t('trading-assistant.form.notifyChannelsHint') }}</div>
+              </a-form-item>
+
+              <a-form-item
+                v-if="notifyChannelsUi.includes('email')"
+                :label="$t('trading-assistant.form.notifyEmail')"
+              >
+                <a-input
+                  v-decorator="['notify_email', { rules: [{ type: 'email', message: $t('trading-assistant.validation.emailInvalid') }] }]"
+                  :placeholder="$t('trading-assistant.placeholders.inputEmail')"
+                />
+              </a-form-item>
+
+              <a-form-item
+                v-if="notifyChannelsUi.includes('phone')"
+                :label="$t('trading-assistant.form.notifyPhone')"
+              >
+                <a-input
+                  v-decorator="['notify_phone']"
+                  :placeholder="$t('trading-assistant.placeholders.inputPhone')"
+                />
+              </a-form-item>
+
+              <a-form-item
+                v-if="notifyChannelsUi.includes('telegram')"
+                :label="$t('trading-assistant.form.notifyTelegram')"
+              >
+                <a-input
+                  v-decorator="['notify_telegram']"
+                  :placeholder="$t('trading-assistant.placeholders.inputTelegram')"
+                />
+              </a-form-item>
+
+              <a-form-item
+                v-if="notifyChannelsUi.includes('discord')"
+                :label="$t('trading-assistant.form.notifyDiscord')"
+              >
+                <a-input
+                  v-decorator="['notify_discord']"
+                  :placeholder="$t('trading-assistant.placeholders.inputDiscord')"
+                />
+              </a-form-item>
+
+              <a-form-item
+                v-if="notifyChannelsUi.includes('webhook')"
+                :label="$t('trading-assistant.form.notifyWebhook')"
+              >
+                <a-input
+                  v-decorator="['notify_webhook']"
+                  :placeholder="$t('trading-assistant.placeholders.inputWebhook')"
+                />
+              </a-form-item>
+
+              <a-divider v-if="executionModeUi === 'live' && isCryptoMarket" />
+
+              <!-- Live trading: exchange credentials (crypto only) -->
+              <div v-if="executionModeUi === 'live' && isCryptoMarket">
+                <a-alert
+                  type="info"
+                  show-icon
+                  style="margin-bottom: 12px;"
+                  :message="$t('trading-assistant.form.liveTradingConfigTitle')"
+                  :description="$t('trading-assistant.form.liveTradingConfigHint')"
+                />
+
+                <a-form-item :label="$t('trading-assistant.form.savedCredential')">
+                  <a-select
+                    v-decorator="['credential_id', { getValueFromEvent: (val) => val || undefined }]"
+                    :placeholder="$t('trading-assistant.placeholders.selectSavedCredential')"
+                    allow-clear
+                    show-search
+                    option-filter-prop="children"
+                    :loading="loadingExchangeCredentials"
+                    @change="handleCredentialSelectChange"
+                  >
+                    <a-select-option
+                      v-for="cred in exchangeCredentials"
+                      :key="cred.id"
+                      :value="cred.id"
+                    >
+                      {{ formatCredentialLabel(cred) }}
+                    </a-select-option>
+                  </a-select>
+                  <div class="form-item-hint">{{ $t('trading-assistant.form.savedCredentialHint') }}</div>
+                </a-form-item>
+
+                <a-form-item :label="$t('trading-assistant.form.exchange')">
+                  <a-select
+                    v-decorator="['exchange_id', {
+                      rules: [{ required: true, message: $t('trading-assistant.validation.exchangeRequired') }],
+                      getValueFromEvent: (val) => val || undefined
+                    }]"
+                    :placeholder="$t('trading-assistant.placeholders.selectExchange')"
+                    allow-clear
+                    show-search
+                    option-filter-prop="children"
+                    @change="handleExchangeSelectChange"
+                  >
+                    <a-select-option
+                      v-for="exchange in formattedExchangeOptions"
+                      :key="exchange.value"
+                      :value="exchange.value"
+                    >
+                      {{ exchange.displayName }}
+                    </a-select-option>
+                  </a-select>
+                </a-form-item>
+
+                <a-form-item :label="$t('trading-assistant.form.apiKey')">
+                  <a-input-password
+                    v-decorator="['api_key', { rules: [{ required: true, message: $t('trading-assistant.validation.apiKeyRequired') }] }]"
+                    :placeholder="$t('trading-assistant.placeholders.inputApiKey')"
+                    autocomplete="new-password"
+                    @change="handleApiConfigChange"
+                  />
+                </a-form-item>
+
+                <a-form-item :label="$t('trading-assistant.form.secretKey')">
+                  <a-input-password
+                    v-decorator="['secret_key', { rules: [{ required: true, message: $t('trading-assistant.validation.secretKeyRequired') }] }]"
+                    :placeholder="$t('trading-assistant.placeholders.inputSecretKey')"
+                    autocomplete="new-password"
+                    @change="handleApiConfigChange"
+                  />
+                </a-form-item>
+
+                <a-form-item
+                  v-if="needsPassphrase"
+                  :label="$t('trading-assistant.form.passphrase')"
+                >
+                  <a-input-password
+                    v-decorator="['passphrase', { rules: [{ required: true, message: $t('trading-assistant.validation.passphraseRequired') }] }]"
+                    :placeholder="$t('trading-assistant.placeholders.inputPassphrase')"
+                    autocomplete="new-password"
+                    @change="handleApiConfigChange"
+                  />
+                </a-form-item>
+
+                <a-form-item>
+                  <a-checkbox
+                    v-decorator="['save_credential', { valuePropName: 'checked', initialValue: false }]"
+                    @change="onSaveCredentialChange"
+                  >
+                    {{ $t('trading-assistant.form.saveCredential') }}
+                  </a-checkbox>
+                </a-form-item>
+
+                <a-form-item
+                  v-if="saveCredentialUi"
+                  :label="$t('trading-assistant.form.credentialName')"
+                >
+                  <a-input
+                    v-decorator="['credential_name']"
+                    :placeholder="$t('trading-assistant.placeholders.inputCredentialName')"
+                  />
+                </a-form-item>
+
+                <a-form-item>
+                  <a-button
+                    type="default"
+                    :loading="testing"
+                    @click="handleTestConnection"
+                    block
+                  >
+                    <a-icon type="wallet" />
+                    {{ $t('trading-assistant.form.testConnection') }}
+                  </a-button>
+                  <div v-if="testResult" class="test-result" :class="testResult.success ? 'success' : 'error'">
+                    {{ testResult.message }}
+                  </div>
+                </a-form-item>
+              </div>
+            </a-form>
+          </div>
+        </div>
+      </a-spin>
+
+      <template slot="footer">
+        <a-button @click="handleCloseModal">{{ $t('trading-assistant.form.cancel') }}</a-button>
+        <a-button
+          v-show="currentStep > 0"
+          @click="handlePrev"
+        >
+          {{ $t('trading-assistant.form.prev') }}
+        </a-button>
+        <a-button
+          v-show="currentStep < 2"
+          type="primary"
+          @click="handleNext"
+          :loading="saving"
+        >
+          {{ $t('trading-assistant.form.next') }}
+        </a-button>
+        <a-button
+          v-show="currentStep === 2"
+          type="primary"
+          @click="handleSubmit"
+          :loading="saving"
+        >
+          {{ editingStrategy ? $t('trading-assistant.form.confirmEdit') : $t('trading-assistant.form.confirmCreate') }}
+        </a-button>
+      </template>
+    </a-modal>
+  </div>
+</template>
+
+<script>
+import { getStrategyList, startStrategy, stopStrategy, deleteStrategy, createStrategy, updateStrategy, testExchangeConnection, getStrategyEquityCurve, getStrategyNotifications } from '@/api/strategy'
+import { getWatchlist } from '@/api/market'
+import { listExchangeCredentials, getExchangeCredential, createExchangeCredential } from '@/api/credentials'
+import { baseMixin } from '@/store/app-mixin'
+import request from '@/utils/request'
+import TradingRecords from './components/TradingRecords.vue'
+import PositionRecords from './components/PositionRecords.vue'
+
+// 常见加密货币交易对
+const CRYPTO_SYMBOLS = [
+  'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'ADA/USDT',
+  'XRP/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT', 'AVAX/USDT',
+  'LINK/USDT', 'UNI/USDT', 'LTC/USDT', 'ATOM/USDT', 'ETC/USDT'
+]
+
+// 交易所选项（前端仅展示后端已适配/支持的交易所）
+// 注意：这些标签在组件中会通过计算属性动态生成，以支持多语言
+const EXCHANGE_OPTIONS = [
+  { value: 'binance', labelKey: 'binance' },
+  { value: 'okx', labelKey: 'okx' },
+  { value: 'bitget', labelKey: 'bitget' },
+  { value: 'bybit', labelKey: 'bybit' },
+  { value: 'coinbaseexchange', labelKey: 'coinbaseexchange' },
+  { value: 'kraken', labelKey: 'kraken' },
+  { value: 'kucoin', labelKey: 'kucoin' },
+  { value: 'gate', labelKey: 'gate' },
+  { value: 'bitfinex', labelKey: 'bitfinex' }
+]
+
+export default {
+  name: 'TradingAssistant',
+  mixins: [baseMixin],
+  components: {
+    TradingRecords,
+    PositionRecords
+  },
+  computed: {
+    isDarkTheme () {
+      return this.navTheme === 'dark' || this.navTheme === 'realdark'
+    },
+    needsPassphrase () {
+      // 需要 passphrase 的交易所
+      return ['okx', 'okex', 'coinbaseexchange', 'kucoin', 'bitget'].includes(this.currentExchangeId)
+    },
+    // 预处理交易所列表，包含显示名称，提升性能
+    formattedExchangeOptions () {
+      return EXCHANGE_OPTIONS.map(exchange => {
+        let label = ''
+        try {
+          if (exchange.labelKey) {
+            const translationKey = `trading-assistant.exchangeNames.${exchange.labelKey}`
+            const translated = this.$t(translationKey)
+            if (translated !== translationKey) {
+              label = translated
+            }
+          }
+        } catch (e) {
+          // 忽略翻译错误
+        }
+
+        if (!label) {
+          label = exchange.value.charAt(0).toUpperCase() + exchange.value.slice(1)
+        }
+        return {
+          ...exchange,
+          displayName: label
+        }
+      })
+    },
+    totalPnl () {
+      if (this.currentEquity === null || !this.selectedStrategy || !this.selectedStrategy.initial_capital) {
+        return null
+      }
+      return this.currentEquity - (this.selectedStrategy.initial_capital || 0)
+    },
+    totalPnlPercent () {
+      if (this.totalPnl === null || !this.selectedStrategy || !this.selectedStrategy.initial_capital) {
+        return null
+      }
+      if (this.selectedStrategy.initial_capital === 0) return 0
+      return (this.totalPnl / this.selectedStrategy.initial_capital) * 100
+    },
+    getEquityColorClass () {
+      if (this.totalPnl === null) return ''
+      return this.totalPnl >= 0 ? 'text-success' : 'text-danger'
+    },
+    getPnlColorClass () {
+      if (this.totalPnl === null) return ''
+      return this.totalPnl >= 0 ? 'text-success' : 'text-danger'
+    },
+    isCryptoMarket () {
+      // IMPORTANT: do not rely on form.getFieldValue for reactivity (Ant Form is not reactive).
+      // Always depend on selectedMarketCategory to make UI reactive.
+      const cat = this.selectedMarketCategory || 'Crypto'
+      return String(cat).toLowerCase() === 'crypto'
+    }
+  },
+  data () {
+    return {
+      loading: false,
+      loadingRecords: false,
+      strategies: [],
+      selectedStrategy: null,
+      showFormModal: false,
+      // Only indicator strategy in local mode
+      strategyType: 'indicator',
+      selectedMarketCategory: 'Crypto', // AShare / USStock / Crypto / Forex
+      currentStep: 0,
+      saving: false,
+      loadingIndicators: false,
+      availableIndicators: [],
+      selectedIndicator: null,
+      cryptoSymbols: CRYPTO_SYMBOLS,
+      // Watchlist symbols (same source as indicator-analysis page)
+      loadingWatchlist: false,
+      watchlist: [],
+      exchangeOptions: EXCHANGE_OPTIONS,
+      currentExchangeId: '',
+      testing: false,
+      testResult: null,
+      connectionTestResult: null,
+      indicatorsLoaded: false, // 标记指标是否已加载
+      editingStrategy: null, // 正在编辑的策略
+      currentEquity: null, // 当前净值
+      equityPollingTimer: null, // 净值轮询定时器
+      // Backtest-like UI state (same as indicator-analysis BacktestModal step1)
+      backtestCollapseKeys: ['risk'],
+      trailingEnabledUi: false,
+      entryPctMaxUi: 100,
+      aiFilterEnabledUi: false,
+      aiFilterPromptUi: '',
+      isEditMode: false, // 是否为编辑模式
+      supportedIPs: [], // 白名单IP列表
+      executionModeUi: 'signal',
+      notifyChannelsUi: ['browser'],
+      // Exchange credentials vault
+      loadingExchangeCredentials: false,
+      exchangeCredentials: [],
+      saveCredentialUi: false,
+      suppressApiClearOnce: false,
+      // Signal notifications (browser channel) -> sound-only reminder
+      notifyPollTimer: null,
+      notifySinceId: 0,
+      notifyPollIntervalMs: 3000,
+      beepEnabled: true,
+      beepCtx: null
+      // Market category is inferred from Step 1 watchlist symbol ("Market:SYMBOL").
+    }
+  },
+  beforeCreate () {
+    this.form = this.$form.createForm(this)
+  },
+  mounted () {
+    this.loadStrategies()
+  },
+  beforeDestroy () {
+    this.stopEquityPolling()
+    this.stopSignalNotifyPolling()
+  },
+  methods: {
+    playSignalBeep () {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext
+        if (!AudioCtx) return
+        if (!this.beepCtx) this.beepCtx = new AudioCtx()
+        const ctx = this.beepCtx
+        // Some browsers require resume after user interaction
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+          ctx.resume().catch(() => {})
+        }
+        const o = ctx.createOscillator()
+        const g = ctx.createGain()
+        o.type = 'sine'
+        o.frequency.value = 880
+        g.gain.value = 0.05
+        o.connect(g)
+        g.connect(ctx.destination)
+        o.start()
+        o.stop(ctx.currentTime + 0.15)
+      } catch (e) {}
+    },
+    stopSignalNotifyPolling () {
+      if (this.notifyPollTimer) {
+        clearInterval(this.notifyPollTimer)
+        this.notifyPollTimer = null
+      }
+    },
+    startSignalNotifyPolling (strategyId) {
+      this.stopSignalNotifyPolling()
+      this.notifySinceId = 0
+      const sid = Number(strategyId || 0)
+      if (!sid) return
+      this.notifyPollTimer = setInterval(() => {
+        this.pollSignalNotifications(sid)
+      }, Number(this.notifyPollIntervalMs || 3000))
+      // first tick
+      this.pollSignalNotifications(sid)
+    },
+    async pollSignalNotifications (strategyId) {
+      const sid = Number(strategyId || 0)
+      if (!sid) return
+      try {
+        const res = await getStrategyNotifications({ id: sid, since_id: this.notifySinceId || 0, limit: 50 })
+        if (!res || res.code !== 1) return
+        const items = (res.data && res.data.items) || []
+        if (!Array.isArray(items) || items.length === 0) return
+        // Backend returns DESC; compute max id.
+        let maxId = this.notifySinceId || 0
+        for (const it of items) {
+          const nid = Number(it && it.id)
+          if (nid && nid > maxId) maxId = nid
+        }
+        if (maxId > (this.notifySinceId || 0)) {
+          this.notifySinceId = maxId
+          if (this.beepEnabled && this.notifyChannelsUi && this.notifyChannelsUi.includes('browser')) {
+            this.playSignalBeep()
+          }
+        }
+      } catch (e) {}
+    },
+    async loadWatchlist () {
+      this.loadingWatchlist = true
+      try {
+        const res = await getWatchlist({ userid: 1 })
+        if (res && res.code === 1) {
+          this.watchlist = Array.isArray(res.data) ? res.data : []
+        } else {
+          this.watchlist = []
+        }
+      } catch (e) {
+        this.watchlist = []
+      } finally {
+        this.loadingWatchlist = false
+      }
+    },
+    filterWatchlistOption (input, option) {
+      const value = option.componentOptions?.propsData?.value || ''
+      return String(value).toLowerCase().includes(String(input || '').toLowerCase())
+    },
+    getMarketColor (market) {
+      const colors = {
+        AShare: 'blue',
+        USStock: 'green',
+        HShare: 'orange',
+        Crypto: 'purple',
+        Forex: 'gold',
+        Futures: 'cyan'
+      }
+      return colors[market] || 'default'
+    },
+    handleWatchlistSymbolChange (val) {
+      // val format: "Market:SYMBOL" (same as indicator-analysis page)
+      if (!val || typeof val !== 'string' || !val.includes(':')) {
+        return
+      }
+      const idx = val.indexOf(':')
+      const market = val.slice(0, idx)
+      // Keep selection reactive for Step 3 execution gating
+      this.selectedMarketCategory = market || 'Crypto'
+
+      // Non-crypto markets cannot use live trading. Force back to signal to keep UI consistent.
+      if (this.selectedMarketCategory !== 'Crypto') {
+        this.executionModeUi = 'signal'
+        try {
+          this.form && this.form.setFieldsValue && this.form.setFieldsValue({ execution_mode: 'signal' })
+        } catch (e) {}
+      }
+    },
+    async loadExchangeCredentials () {
+      this.loadingExchangeCredentials = true
+      try {
+        const res = await listExchangeCredentials({ user_id: 1 })
+        if (res && res.code === 1) {
+          this.exchangeCredentials = (res.data && res.data.items) || []
+        } else {
+          this.exchangeCredentials = []
+          this.$message.warning(res?.msg || this.$t('trading-assistant.messages.loadFailed'))
+        }
+      } catch (e) {
+        this.exchangeCredentials = []
+        this.$message.warning(this.$t('trading-assistant.exchange.testFailed'))
+      } finally {
+        this.loadingExchangeCredentials = false
+      }
+    },
+    formatCredentialLabel (cred) {
+      if (!cred) return ''
+      const name = (cred.name || '').trim()
+      const ex = cred.exchange_id || ''
+      const hint = cred.api_key_hint || ''
+      return name ? `${ex.toUpperCase()} - ${name} (${hint})` : `${ex.toUpperCase()} (${hint})`
+    },
+    async handleCredentialSelectChange (credentialId) {
+      // Selecting a saved credential auto-fills exchange fields
+      if (!credentialId) {
+        return
+      }
+
+      // First try to find in local list to avoid API call delay/failure
+      const localCred = this.exchangeCredentials.find(c => String(c.id) === String(credentialId))
+
+      // Function to apply config
+      const applyConfig = async (cfg) => {
+        if (!cfg) return
+
+        // 1. Update exchange ID to ensure correct fields (like passphrase) are rendered
+        this.currentExchangeId = cfg.exchange_id || ''
+
+        // 2. Wait for UI to update (render passphrase field if needed)
+        await this.$nextTick()
+
+        // 3. Set form values
+        // Prevent handleExchangeSelectChange() from clearing API fields when we programmatically set exchange_id.
+        this.suppressApiClearOnce = true
+        this.form.setFieldsValue({
+          exchange_id: cfg.exchange_id,
+          api_key: cfg.api_key,
+          secret_key: cfg.secret_key,
+          passphrase: cfg.passphrase || ''
+        })
+
+        this.testResult = null
+        this.connectionTestResult = null
+      }
+
+      try {
+        // Try to fetch full config including secrets
+        const res = await getExchangeCredential(credentialId, { user_id: 1 })
+        if (res && res.code === 1 && res.data && res.data.config) {
+          await applyConfig(res.data.config)
+        } else if (localCred) {
+          // Fallback to local data if API fails or returns no config
+          // Note: Local list usually doesn't have secrets, but just in case
+          await applyConfig(localCred)
+        }
+      } catch (e) {
+        // Fallback to local data on error
+        if (localCred) {
+          await applyConfig(localCred)
+        }
+      }
+    },
+    onSaveCredentialChange (e) {
+      const checked = !!(e && e.target && e.target.checked)
+      this.saveCredentialUi = checked
+      try {
+        this.form && this.form.setFieldsValue && this.form.setFieldsValue({ save_credential: checked })
+      } catch (err) {}
+    },
+    onExecutionModeChange (e) {
+      const v = e && e.target ? e.target.value : e
+      this.executionModeUi = v || 'signal'
+      if (!this.isCryptoMarket && this.executionModeUi !== 'signal') {
+        this.executionModeUi = 'signal'
+        try {
+          this.form && this.form.setFieldsValue && this.form.setFieldsValue({ execution_mode: 'signal' })
+        } catch (err) {}
+      }
+    },
+    onNotifyChannelsChange (vals) {
+      this.notifyChannelsUi = Array.isArray(vals) ? vals : []
+    },
+    formatCurrency (value) {
+      if (value === null || value === undefined) return '-'
+      return '$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    },
+    formatPnl (value) {
+      if (value === null || value === undefined) return '-'
+      const prefix = value >= 0 ? '+' : ''
+      return prefix + '$' + Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    },
+    formatPnlPercent (value) {
+      if (value === null || value === undefined) return '-'
+      const prefix = value >= 0 ? '+' : ''
+      return prefix + Math.abs(value).toFixed(2) + '%'
+    },
+    async loadStrategies () {
+      this.loading = true
+      try {
+        const res = await getStrategyList()
+        if (res.code === 1) {
+          // 显示所有策略（包括指标策略和AI策略）
+          const allStrategies = res.data.strategies || []
+          this.strategies = allStrategies
+          // 如果有选中的策略，更新它
+          if (this.selectedStrategy) {
+            const updated = this.strategies.find(s => s.id === this.selectedStrategy.id)
+            if (updated) {
+              this.selectedStrategy = updated
+            } else {
+              // 如果选中的策略被过滤掉了，清空选中状态
+              this.selectedStrategy = null
+            }
+          }
+        } else {
+          this.$message.error(res.msg || this.$t('trading-assistant.messages.loadFailed'))
+        }
+      } catch (error) {
+        this.$message.error(this.$t('trading-assistant.messages.loadFailed'))
+      } finally {
+        this.loading = false
+      }
+    },
+    handleCreateStrategy () {
+      // Local mode: open indicator strategy modal directly
+      this.isEditMode = false
+      this.editingStrategy = null
+      this.strategyType = 'indicator'
+      this.currentStep = 0
+      this.currentExchangeId = ''
+      this.selectedIndicator = null
+      this.testResult = null
+      this.connectionTestResult = null
+      this.executionModeUi = 'signal'
+      this.notifyChannelsUi = ['browser']
+      this.saveCredentialUi = false
+      this.backtestCollapseKeys = ['risk']
+      this.trailingEnabledUi = false
+      this.entryPctMaxUi = 100
+      this.aiFilterEnabledUi = false
+      this.selectedMarketCategory = 'Crypto'
+
+      this.form.resetFields()
+      this.form.setFieldsValue({
+        execution_mode: 'signal',
+        notify_channels: ['browser'],
+        save_credential: false
+      })
+      this.showFormModal = true
+
+      this.$nextTick(() => {
+        this.loadWatchlist()
+        this.loadIndicators()
+        this.loadExchangeCredentials()
+      })
+    },
+    handleEditStrategy (strategy) {
+      // 如果策略正在运行，提示用户先停止
+      if (strategy.status === 'running') {
+        this.$message.warning(this.$t('trading-assistant.messages.runningWarning'))
+        return
+      }
+
+      // Local mode: indicator strategy only
+      this.strategyType = 'indicator'
+
+      this.isEditMode = true
+      this.editingStrategy = strategy
+      this.currentStep = 0
+      this.currentExchangeId = ''
+      this.selectedIndicator = null
+      this.testResult = null
+      this.connectionTestResult = null
+      this.form.resetFields()
+      this.backtestCollapseKeys = ['risk']
+      this.trailingEnabledUi = false
+      this.entryPctMaxUi = 100
+      this.aiFilterEnabledUi = false
+
+      // IMPORTANT:
+      // Ensure modal is visible BEFORE filling form values, otherwise some fields are not registered yet
+      // (especially Step 2/3 fields) and setFieldsValue may silently drop values.
+      this.showFormModal = true
+
+      // Delay loading to ensure modal/form items are mounted.
+      this.$nextTick(async () => {
+        // Keep data sources in sync (same as create flow)
+        this.loadWatchlist()
+        this.loadIndicators()
+        this.loadExchangeCredentials()
+        await this.loadStrategyDataToForm(strategy)
+      })
+    },
+    async loadStrategyDataToForm (strategy) {
+      // 先加载指标列表（如果需要）
+      if (!this.indicatorsLoaded) {
+        await this.loadIndicators()
+      }
+
+      // 使用 nextTick 确保表单已初始化
+      await this.$nextTick()
+
+      // Market / execution / notification defaults (backward compatible)
+      this.selectedMarketCategory = strategy.market_category || 'Crypto'
+      const executionMode = strategy.execution_mode || 'signal'
+      this.executionModeUi = executionMode
+      const notifyChannels = (strategy.notification_config && strategy.notification_config.channels) || ['browser']
+      this.notifyChannelsUi = Array.isArray(notifyChannels) ? notifyChannels : ['browser']
+
+      // Initialize trading config UI states first
+      let trailingEnabled = false
+      // Initialize AI filter state
+      let aiFilterEnabled = false
+      let aiFilterPrompt = ''
+
+      if (strategy.trading_config) {
+        const tc = strategy.trading_config || {}
+        const trailingObj = (tc.trailing && typeof tc.trailing === 'object') ? tc.trailing : null
+        trailingEnabled = (tc.trailing_enabled !== undefined) ? !!tc.trailing_enabled : !!(trailingObj && trailingObj.enabled)
+
+        // Check AI filter - handle various truthy values
+        const aiVal = tc.enable_ai_filter
+        aiFilterEnabled = aiVal === true || aiVal === 'true' || aiVal === 1 || aiVal === '1'
+        aiFilterPrompt = (typeof tc.ai_filter_prompt === 'string') ? tc.ai_filter_prompt : ''
+
+        // Determine which collapse panels to open based on config to ensure fields are rendered
+        const scaleObj = (tc.scale && typeof tc.scale === 'object') ? tc.scale : null
+        const posObj = (tc.position && typeof tc.position === 'object') ? tc.position : null
+        const panels = new Set(['risk']) // Always keep risk panel open or as default
+
+        // Check Scale panel content
+        if (
+          tc.trend_add_enabled || tc.dca_add_enabled ||
+          (scaleObj && (scaleObj.trendAdd?.enabled || scaleObj.dcaAdd?.enabled))
+        ) {
+          panels.add('scale')
+        }
+
+        // Check Reduce panel content
+        if (
+          tc.trend_reduce_enabled || tc.adverse_reduce_enabled ||
+          (scaleObj && (scaleObj.trendReduce?.enabled || scaleObj.adverseReduce?.enabled))
+        ) {
+          panels.add('reduce')
+        }
+
+        // Check Position panel content - open if entry_pct is customized or if we just want to show it
+        // Considering "Entry sizing" parameter missing issue, better to expand it if data exists
+        if (tc.entry_pct !== undefined || (posObj && posObj.entryPct !== undefined)) {
+          panels.add('position')
+        }
+
+        this.backtestCollapseKeys = Array.from(panels)
+      }
+      this.trailingEnabledUi = trailingEnabled
+      this.aiFilterEnabledUi = aiFilterEnabled
+      this.aiFilterPromptUi = aiFilterPrompt
+
+      // Wait for DOM update to ensure v-if fields (trailing) and Collapse panels are rendered
+      await this.$nextTick()
+
+      // First, set the "switch" fields that might control v-if visibility of other fields
+      // For ai_filter, it relies on aiFilterEnabledUi which is updated above, so form value is secondary for UI display
+      // But we still need to set form value for submission
+      this.form.setFieldsValue({
+        enable_ai_filter: aiFilterEnabled
+      })
+
+      // Wait for form value to update and v-if to re-render (for ai_filter)
+      await this.$nextTick()
+
+      this.form.setFieldsValue({
+        execution_mode: this.executionModeUi,
+        notify_channels: this.notifyChannelsUi,
+        notify_email: strategy.notification_config?.targets?.email || '',
+        notify_phone: strategy.notification_config?.targets?.phone || '',
+        notify_telegram: strategy.notification_config?.targets?.telegram || '',
+        notify_discord: strategy.notification_config?.targets?.discord || '',
+        notify_webhook: strategy.notification_config?.targets?.webhook || ''
+      })
+
+      // 加载指标数据
+      if (strategy.indicator_config && strategy.indicator_config.indicator_id) {
+        // 查找对应的指标，确保ID类型一致（处理 string vs number 问题）
+        const targetId = strategy.indicator_config.indicator_id
+        // 使用字符串比较处理类型不匹配问题（string vs number）
+        const indicator = this.availableIndicators.find(ind => {
+          return String(ind.id) === String(targetId)
+        })
+
+        if (indicator) {
+          // 找到匹配的指标，使用指标对象中的ID（确保类型一致）
+          const finalId = String(indicator.id)
+          this.form.setFieldsValue({
+            indicator_id: finalId
+          })
+          this.handleIndicatorChange(finalId)
+        } else {
+          // 如果找不到，仍然设置值，但可能显示为ID
+          this.form.setFieldsValue({
+            indicator_id: String(targetId)
+          })
+        }
+      }
+
+      // 加载交易所配置
+      if (strategy.exchange_config) {
+        this.currentExchangeId = strategy.exchange_config.exchange_id || ''
+
+        // Only set form fields if live trading is enabled (fields are rendered)
+        // Check executionModeUi and market category (via isCryptoMarket, but we need to ensure computed prop is updated or check directly)
+        const isLive = this.executionModeUi === 'live'
+        const isCrypto = this.selectedMarketCategory === 'Crypto'
+
+        if (isLive && isCrypto) {
+          // Prevent exchange change handler from clearing API fields while backfilling saved data.
+          this.suppressApiClearOnce = true
+          this.form.setFieldsValue({
+            exchange_id: strategy.exchange_config.exchange_id,
+            credential_id: strategy.exchange_config.credential_id || undefined,
+            api_key: strategy.exchange_config.api_key || '',
+            secret_key: strategy.exchange_config.secret_key || '',
+            passphrase: strategy.exchange_config.passphrase || ''
+          })
+
+          // If a vault credential is selected, auto-fill secrets from vault (strategy rows may not store secrets).
+          const credId = strategy.exchange_config.credential_id
+          if (credId) {
+            await this.handleCredentialSelectChange(credId)
+          }
+        }
+
+        // 设置当前交易所ID (UI state)
+        if (strategy.exchange_config?.exchange_id) {
+          this.currentExchangeId = strategy.exchange_config.exchange_id
+        }
+      }
+
+      // 加载交易配置
+      if (strategy.trading_config) {
+        const tc = strategy.trading_config || {}
+        const trailingObj = (tc.trailing && typeof tc.trailing === 'object') ? tc.trailing : null
+        const scaleObj = (tc.scale && typeof tc.scale === 'object') ? tc.scale : null
+        const posObj = (tc.position && typeof tc.position === 'object') ? tc.position : null
+
+        // Backward compatible: nested configs from indicator-analysis backtest modal
+        const trendAddObj = scaleObj && scaleObj.trendAdd ? scaleObj.trendAdd : null
+        const dcaAddObj = scaleObj && scaleObj.dcaAdd ? scaleObj.dcaAdd : null
+        const trendReduceObj = scaleObj && scaleObj.trendReduce ? scaleObj.trendReduce : null
+        const adverseReduceObj = scaleObj && scaleObj.adverseReduce ? scaleObj.adverseReduce : null
+
+        // Backward compatible: show symbol as "Market:SYMBOL" for watchlist dropdown
+        const rawSymbol = tc.symbol
+        const symbolValue = (typeof rawSymbol === 'string' && rawSymbol.includes(':'))
+          ? rawSymbol
+          : `${this.selectedMarketCategory}:${rawSymbol}`
+        this.form.setFieldsValue({
+          strategy_name: strategy.strategy_name,
+          symbol: symbolValue,
+          initial_capital: tc.initial_capital,
+          leverage: tc.leverage,
+          trade_direction: tc.trade_direction || 'long',
+          timeframe: tc.timeframe || '1H',
+          market_type: (tc.market_type === 'futures' ? 'swap' : (tc.market_type || 'swap')),
+          take_profit_pct: tc.take_profit_pct || 0,
+          stop_loss_pct: tc.stop_loss_pct || 0,
+          // Trailing: support both flat fields and nested trailing object
+          trailing_enabled: trailingEnabled,
+          trailing_stop_pct: (tc.trailing_stop_pct !== undefined) ? (tc.trailing_stop_pct || 0) : (trailingObj ? (trailingObj.pct || 0) : 0),
+          trailing_activation_pct: (tc.trailing_activation_pct !== undefined) ? (tc.trailing_activation_pct || 0) : (trailingObj ? (trailingObj.activationPct || 0) : 0),
+          // Scale / reduce: support both flat fields and nested objects
+          trend_add_enabled: (tc.trend_add_enabled !== undefined) ? !!tc.trend_add_enabled : !!(trendAddObj && trendAddObj.enabled),
+          trend_add_step_pct: (tc.trend_add_step_pct !== undefined) ? (tc.trend_add_step_pct || 0) : (trendAddObj ? (trendAddObj.stepPct || 0) : 0),
+          trend_add_size_pct: (tc.trend_add_size_pct !== undefined) ? (tc.trend_add_size_pct || 0) : (trendAddObj ? (trendAddObj.sizePct || 0) : 0),
+          trend_add_max_times: (tc.trend_add_max_times !== undefined) ? (tc.trend_add_max_times || 0) : (trendAddObj ? (trendAddObj.maxTimes || 0) : 0),
+          dca_add_enabled: (tc.dca_add_enabled !== undefined) ? !!tc.dca_add_enabled : !!(dcaAddObj && dcaAddObj.enabled),
+          dca_add_step_pct: (tc.dca_add_step_pct !== undefined) ? (tc.dca_add_step_pct || 0) : (dcaAddObj ? (dcaAddObj.stepPct || 0) : 0),
+          dca_add_size_pct: (tc.dca_add_size_pct !== undefined) ? (tc.dca_add_size_pct || 0) : (dcaAddObj ? (dcaAddObj.sizePct || 0) : 0),
+          dca_add_max_times: (tc.dca_add_max_times !== undefined) ? (tc.dca_add_max_times || 0) : (dcaAddObj ? (dcaAddObj.maxTimes || 0) : 0),
+          trend_reduce_enabled: (tc.trend_reduce_enabled !== undefined) ? !!tc.trend_reduce_enabled : !!(trendReduceObj && trendReduceObj.enabled),
+          trend_reduce_step_pct: (tc.trend_reduce_step_pct !== undefined) ? (tc.trend_reduce_step_pct || 0) : (trendReduceObj ? (trendReduceObj.stepPct || 0) : 0),
+          trend_reduce_size_pct: (tc.trend_reduce_size_pct !== undefined) ? (tc.trend_reduce_size_pct || 0) : (trendReduceObj ? (trendReduceObj.sizePct || 0) : 0),
+          trend_reduce_max_times: (tc.trend_reduce_max_times !== undefined) ? (tc.trend_reduce_max_times || 0) : (trendReduceObj ? (trendReduceObj.maxTimes || 0) : 0),
+          adverse_reduce_enabled: (tc.adverse_reduce_enabled !== undefined) ? !!tc.adverse_reduce_enabled : !!(adverseReduceObj && adverseReduceObj.enabled),
+          adverse_reduce_step_pct: (tc.adverse_reduce_step_pct !== undefined) ? (tc.adverse_reduce_step_pct || 0) : (adverseReduceObj ? (adverseReduceObj.stepPct || 0) : 0),
+          adverse_reduce_size_pct: (tc.adverse_reduce_size_pct !== undefined) ? (tc.adverse_reduce_size_pct || 0) : (adverseReduceObj ? (adverseReduceObj.sizePct || 0) : 0),
+          adverse_reduce_max_times: (tc.adverse_reduce_max_times !== undefined) ? (tc.adverse_reduce_max_times || 0) : (adverseReduceObj ? (adverseReduceObj.maxTimes || 0) : 0),
+          entry_pct: (tc.entry_pct === 0 || tc.entry_pct) ? tc.entry_pct : (posObj && posObj.entryPct ? posObj.entryPct : 100),
+          // AI智能决策过滤 - 单独处理 prompt 回填，确保 v-if 已生效
+          enable_ai_filter: aiFilterEnabled
+          // ai_filter_prompt: tc.ai_filter_prompt || '' // Move to separate setFieldsValue to be safe
+        })
+
+        // Ensure prompt is set after main block
+      // Always set prompt (even if disabled) so user won't lose it after toggling.
+      this.$nextTick(() => {
+        try {
+          this.form.setFieldsValue({
+            ai_filter_prompt: tc.ai_filter_prompt || ''
+          })
+        } catch (e) {}
+      })
+
+        this.$nextTick(() => {
+          this.recalcEntryPctMaxUi()
+          this.normalizeEntryPct()
+        })
+      }
+    },
+    handleSelectStrategy (strategy) {
+      this.selectedStrategy = strategy
+      this.currentEquity = null // 重置当前净值
+      this.loadStrategyDetails()
+      this.startEquityPolling() // 开始轮询净值
+      this.startSignalNotifyPolling(strategy && strategy.id) // 浏览器声音提醒（策略信号）
+    },
+    async loadStrategyDetails () {
+      if (!this.selectedStrategy) {
+        return Promise.resolve()
+      }
+      // 加载净值数据
+      try {
+        const res = await getStrategyEquityCurve(this.selectedStrategy.id)
+        if (res.code === 1 && res.data) {
+          // Local backend returns an array curve: [{ time, equity }, ...]
+          if (Array.isArray(res.data) && res.data.length > 0) {
+            const last = res.data[res.data.length - 1]
+            this.currentEquity = last.equity
+          } else {
+            const base = this.selectedStrategy.trading_config?.initial_capital || this.selectedStrategy.initial_capital
+            this.currentEquity = base || null
+          }
+        }
+      } catch (error) {
+      }
+    },
+    startEquityPolling () {
+      this.stopEquityPolling()
+      if (!this.selectedStrategy) return
+
+      // 初始加载一次
+      this.loadStrategyDetails()
+
+      // 每30秒轮询一次
+      this.equityPollingTimer = setInterval(() => {
+        this.loadStrategyDetails()
+      }, 30000)
+    },
+    stopEquityPolling () {
+      if (this.equityPollingTimer) {
+        clearInterval(this.equityPollingTimer)
+        this.equityPollingTimer = null
+      }
+    },
+    handleCloseModal () {
+      this.showFormModal = false
+      this.editingStrategy = null
+      this.isEditMode = false
+      this.strategyType = 'indicator'
+      this.currentStep = 0
+      this.currentExchangeId = ''
+      this.selectedIndicator = null
+      this.testResult = null
+      this.connectionTestResult = null
+      this.indicatorsLoaded = false
+      this.availableIndicators = []
+      this.backtestCollapseKeys = ['risk']
+      this.trailingEnabledUi = false
+      this.entryPctMaxUi = 100
+      this.aiFilterEnabledUi = false
+      this.aiFilterPromptUi = ''
+
+      this.form.resetFields()
+    },
+    handleRefresh () {
+      this.loadStrategies()
+      this.showFormModal = false
+    },
+    handleMenuClick (key, strategy) {
+      switch (key) {
+        case 'start':
+          this.handleStartStrategy(strategy.id)
+          break
+        case 'stop':
+          this.handleStopStrategy(strategy.id)
+          break
+        case 'edit':
+          this.handleEditStrategy(strategy)
+          break
+        case 'delete':
+          this.handleDeleteStrategy(strategy)
+          break
+      }
+    },
+    async handleStartStrategy (id) {
+      try {
+        const res = await startStrategy(id)
+        if (res.code === 1) {
+          this.$message.success(this.$t('trading-assistant.messages.startSuccess'))
+          this.loadStrategies()
+          // 更新选中的策略状态
+          if (this.selectedStrategy && this.selectedStrategy.id === id) {
+            this.selectedStrategy.status = 'running'
+          }
+        } else {
+          this.$message.error(res.msg || this.$t('trading-assistant.messages.startFailed'))
+        }
+      } catch (error) {
+        this.$message.error(this.$t('trading-assistant.messages.startFailed'))
+      }
+    },
+    async handleStopStrategy (id) {
+      try {
+        const res = await stopStrategy(id)
+        if (res.code === 1) {
+          this.$message.success(this.$t('trading-assistant.messages.stopSuccess'))
+          this.loadStrategies()
+          // 更新选中的策略状态
+          if (this.selectedStrategy && this.selectedStrategy.id === id) {
+            this.selectedStrategy.status = 'stopped'
+          }
+        } else {
+          this.$message.error(res.msg || this.$t('trading-assistant.messages.stopFailed'))
+        }
+      } catch (error) {
+        this.$message.error(this.$t('trading-assistant.messages.stopFailed'))
+      }
+    },
+    handleDeleteStrategy (strategy) {
+      const confirmText = this.$t('trading-assistant.messages.deleteConfirmWithName', {
+        name: strategy.strategy_name
+      })
+      this.$confirm({
+        title: this.$t('trading-assistant.deleteStrategy'),
+        content: confirmText,
+        okText: this.$t('trading-assistant.deleteStrategy'),
+        okType: 'danger',
+        cancelText: this.$t('trading-assistant.form.cancel'),
+        onOk: async () => {
+          try {
+            const res = await deleteStrategy(strategy.id)
+            if (res.code === 1) {
+              this.$message.success(this.$t('trading-assistant.messages.deleteSuccess'))
+              if (this.selectedStrategy && this.selectedStrategy.id === strategy.id) {
+                this.selectedStrategy = null
+                this.stopEquityPolling() // 停止轮询
+              }
+              this.loadStrategies()
+            } else {
+              this.$message.error(res.msg || this.$t('trading-assistant.messages.deleteFailed'))
+            }
+          } catch (error) {
+            this.$message.error(this.$t('trading-assistant.messages.deleteFailed'))
+          }
+        }
+      })
+    },
+    getStatusColor (status) {
+      const colors = {
+        running: 'green',
+        stopped: 'default',
+        error: 'red'
+      }
+      return colors[status] || 'default'
+    },
+    getStatusText (status) {
+      return this.$t(`trading-assistant.status.${status}`) || status
+    },
+    getStrategyTypeText (type) {
+      return this.$t(`trading-assistant.strategyType.${type}`) || type
+    },
+    getTradeDirectionText (direction) {
+      if (!direction) return ''
+      const directionMap = {
+        long: this.$t('trading-assistant.form.tradeDirectionLong') || '做多',
+        short: this.$t('trading-assistant.form.tradeDirectionShort') || '做空',
+        both: this.$t('trading-assistant.form.tradeDirectionBoth') || '双向'
+      }
+      return directionMap[direction] || direction
+    },
+    // 指标相关方法
+    async handleIndicatorSelectFocus () {
+      // 懒加载：只在用户点击选择框时才加载指标
+      if (!this.indicatorsLoaded && !this.loadingIndicators) {
+        await this.loadIndicators()
+      }
+    },
+    async loadIndicators () {
+      if (this.loadingIndicators) {
+        // 如果正在加载，等待加载完成
+        return new Promise((resolve) => {
+          const checkInterval = setInterval(() => {
+            if (!this.loadingIndicators) {
+              clearInterval(checkInterval)
+              resolve()
+            }
+          }, 100)
+        })
+      }
+
+      if (this.indicatorsLoaded) {
+        return Promise.resolve()
+      }
+
+      // 获取用户ID
+      const userInfo = this.$store.getters.userInfo || {}
+      const userId = userInfo.id || 1
+
+      this.loadingIndicators = true
+      try {
+        // 使用和 indicator-analysis 页面相同的接口
+        const res = await request({
+          url: '/api/indicator/getIndicators',
+          method: 'post',
+          data: {
+            userid: userId
+          }
+        })
+
+        if (res.code === 1 && res.data) {
+          // 将所有指标（包括选购的和自己创建的）合并到一个数组
+          const indicators = res.data.map(item => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            type: item.indicator_type || item.indicatorType || 'python',
+            code: item.code,
+            is_buy: item.is_buy,
+            source: item.is_buy === 1 ? 'bought' : 'custom'
+          }))
+
+          this.availableIndicators = indicators
+          this.indicatorsLoaded = true
+        } else {
+          this.availableIndicators = []
+          this.$message.warning(res.msg || this.$t('trading-assistant.messages.loadIndicatorsFailed'))
+        }
+      } catch (error) {
+        this.availableIndicators = []
+        this.$message.warning(this.$t('trading-assistant.messages.loadIndicatorsFailed'))
+      } finally {
+        this.loadingIndicators = false
+      }
+    },
+    handleIndicatorChange (indicatorId) {
+      const idStr = String(indicatorId)
+      this.selectedIndicator = this.availableIndicators.find(ind => String(ind.id) === idStr)
+    },
+    handleMarketTypeChange (e) {
+      const marketType = e.target.value
+      // 如果切换到现货，自动设置交易方向为做多，杠杆为1
+      if (marketType === 'spot') {
+        this.form.setFieldsValue({
+          trade_direction: 'long',
+          leverage: 1
+        })
+      }
+    },
+    // --- Backtest-like UI helpers (Ant Form getFieldValue is not reactive) ---
+    recalcEntryPctMaxUi () {
+      if (!this.form) {
+        this.entryPctMaxUi = 100
+        return
+      }
+      const trendOn = !!this.form.getFieldValue('trend_add_enabled')
+      const dcaOn = !!this.form.getFieldValue('dca_add_enabled')
+      const trendTimes = Number(this.form.getFieldValue('trend_add_max_times') || 0)
+      const dcaTimes = Number(this.form.getFieldValue('dca_add_max_times') || 0)
+      const trendSizePct = Number(this.form.getFieldValue('trend_add_size_pct') || 0)
+      const dcaSizePct = Number(this.form.getFieldValue('dca_add_size_pct') || 0)
+
+      const reservePct = (trendOn ? trendTimes * trendSizePct : 0) + (dcaOn ? dcaTimes * dcaSizePct : 0)
+      const maxEntryPct = Math.max(0, Math.min(100, 100 - reservePct))
+      this.entryPctMaxUi = maxEntryPct
+    },
+    normalizeEntryPct () {
+      if (!this.form) return
+      const current = Number(this.form.getFieldValue('entry_pct') || 0)
+      const max = Number(this.entryPctMaxUi || 100)
+      if (current > max) {
+        this.form.setFieldsValue({ entry_pct: max })
+      }
+    },
+    onTrendAddToggle (checked) {
+      if (!this.form) return
+      // Mutual exclusion to avoid double scale-in on the same candle.
+      if (checked) {
+        this.form.setFieldsValue({ dca_add_enabled: false })
+      }
+      this.$nextTick(() => {
+        this.recalcEntryPctMaxUi()
+        this.normalizeEntryPct()
+      })
+    },
+    onDcaAddToggle (checked) {
+      if (!this.form) return
+      if (checked) {
+        this.form.setFieldsValue({ trend_add_enabled: false })
+      }
+      this.$nextTick(() => {
+        this.recalcEntryPctMaxUi()
+        this.normalizeEntryPct()
+      })
+    },
+    onScaleParamsChange () {
+      this.$nextTick(() => {
+        this.recalcEntryPctMaxUi()
+        this.normalizeEntryPct()
+      })
+    },
+    onEntryPctChange () {
+      this.$nextTick(() => this.normalizeEntryPct())
+    },
+    onTrailingToggle (checked) {
+      if (!this.form) return
+      this.trailingEnabledUi = !!checked
+      // Only show fields when enabled; also clear values when disabled.
+      if (!checked) {
+        this.form.setFieldsValue({ trailing_stop_pct: 0, trailing_activation_pct: 0 })
+      }
+    },
+    onAiFilterToggle (checked) {
+      this.aiFilterEnabledUi = !!checked
+      // Ensure rc-form value is always in sync even if decorator event binding gets overridden.
+      try {
+        this.form && this.form.setFieldsValue && this.form.setFieldsValue({ enable_ai_filter: !!checked })
+      } catch (e) {}
+      // If disabled, we might want to clear the prompt, but it's optional.
+    },
+    onAiFilterPromptInput (valOrEvent) {
+      // Keep prompt value in Vue state and (best-effort) in rc-form.
+      const v = (valOrEvent && valOrEvent.target) ? valOrEvent.target.value : valOrEvent
+      this.aiFilterPromptUi = (typeof v === 'string') ? v : (this.aiFilterPromptUi || '')
+      try {
+        this.form && this.form.setFieldsValue && this.form.setFieldsValue({ ai_filter_prompt: this.aiFilterPromptUi })
+      } catch (e) {}
+    },
+    filterIndicatorOption (input, option) {
+      const text = option.componentOptions.children[0].children[0].text
+      return text.toLowerCase().indexOf(input.toLowerCase()) >= 0
+    },
+    filterSymbolOption (input, option) {
+      return option.componentOptions.children[0].text.toLowerCase().indexOf(input.toLowerCase()) >= 0
+    },
+    getIndicatorTypeColor (type) {
+      const colors = {
+        trend: 'blue',
+        momentum: 'green',
+        volatility: 'orange',
+        volume: 'purple',
+        custom: 'default'
+      }
+      return colors[type] || 'default'
+    },
+    getIndicatorTypeName (type) {
+      return this.$t(`trading-assistant.indicatorType.${type}`) || type
+    },
+    // 交易所相关方法
+    getExchangeName (exchange) {
+      if (exchange.labelKey) {
+        const translationKey = `trading-assistant.exchangeNames.${exchange.labelKey}`
+        const translated = this.$t(translationKey)
+        // 如果翻译不存在，返回键值本身，否则返回翻译后的名称
+        if (translated === translationKey) {
+          // 翻译不存在，返回交易所ID的首字母大写
+          return exchange.value.charAt(0).toUpperCase() + exchange.value.slice(1)
+        }
+        return translated
+      }
+      return exchange.label || exchange.value
+    },
+    getExchangeDisplayName (exchangeId) {
+      if (!exchangeId) return ''
+      // 查找对应的交易所选项
+      const exchange = this.exchangeOptions.find(ex => ex.value === exchangeId)
+      if (exchange) {
+        return this.getExchangeName(exchange)
+      }
+      // 如果找不到，返回格式化的交易所ID
+      return exchangeId.charAt(0).toUpperCase() + exchangeId.slice(1)
+    },
+    getExchangeTagColor (exchangeId) {
+      // 为不同交易所设置不同的标签颜色
+      const colorMap = {
+        binance: 'gold',
+        okx: 'blue',
+        coinbaseexchange: 'cyan',
+        kraken: 'purple',
+        bitfinex: 'geekblue',
+        huobi: 'orange',
+        gate: 'green',
+        mexc: 'lime',
+        kucoin: 'volcano',
+        bybit: 'red',
+        bitget: 'magenta',
+        bitmex: 'red',
+        deribit: 'blue',
+        phemex: 'cyan',
+        bitmart: 'geekblue',
+        bitstamp: 'purple',
+        bittrex: 'orange',
+        poloniex: 'green',
+        gemini: 'lime',
+        cryptocom: 'volcano',
+        blockchaincom: 'magenta',
+        bitflyer: 'red',
+        upbit: 'blue',
+        bithumb: 'cyan',
+        coinone: 'purple',
+        zb: 'geekblue',
+        lbank: 'orange',
+        bibox: 'green',
+        bigone: 'lime',
+        bitrue: 'volcano',
+        coinex: 'magenta',
+        ftx: 'red',
+        ftxus: 'blue',
+        binanceus: 'gold',
+        binancecoinm: 'gold',
+        binanceusdm: 'gold'
+      }
+      return colorMap[exchangeId] || 'default'
+    },
+    handleApiConfigChange () {
+      // 当API配置字段变化时，清空测试结果，需要重新测试
+      this.testResult = null
+      this.connectionTestResult = null
+    },
+    handleExchangeSelectChange (value) {
+      this.currentExchangeId = value || ''
+      this.testResult = null
+      this.connectionTestResult = null
+
+      // If exchange_id is set programmatically (e.g. by selecting a saved credential),
+      // don't clear the api fields we just filled.
+      if (this.suppressApiClearOnce) {
+        this.suppressApiClearOnce = false
+        return
+      }
+
+      // Clear API fields when exchange changes, as we rely on "Saved credential"
+      this.$nextTick(() => {
+        const fieldsToClear = {
+          api_key: undefined,
+          secret_key: undefined,
+          passphrase: undefined
+        }
+        setTimeout(() => {
+          this.form.setFieldsValue(fieldsToClear)
+        }, 100)
+      })
+    },
+    getPlaceholder (fieldType) {
+      const placeholders = {
+        okx: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key',
+          passphrase: '请输入Passphrase（创建API时设置）'
+        },
+        okex: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key',
+          passphrase: '请输入Passphrase（创建API时设置）'
+        },
+        binance: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key'
+        },
+        coinbaseexchange: {
+          api_key: '请输入API Key（或Key Name）',
+          secret_key: '请输入API Secret（或Private Key）',
+          passphrase: '请输入Passphrase（Legacy Pro API需要）'
+        },
+        kucoin: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key',
+          passphrase: '请输入Passphrase'
+        },
+        gate: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key'
+        },
+        mexc: {
+          api_key: '请输入Access Key',
+          secret_key: '请输入Secret Key'
+        },
+        kraken: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key'
+        },
+        bitfinex: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key'
+        },
+        bybit: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key'
+        },
+        bitget: {
+          api_key: '请输入API Key',
+          secret_key: '请输入Secret Key',
+          passphrase: '请输入Passphrase（Legacy Pro API需要）'
+        }
+      }
+
+      const exchangePlaceholders = placeholders[this.currentExchangeId] || {}
+      if (exchangePlaceholders[fieldType]) {
+        return exchangePlaceholders[fieldType]
+      }
+      // 默认占位符使用多语言
+      const fieldLabels = {
+        'api_key': this.$t('trading-assistant.placeholders.inputApiKey'),
+        'secret_key': this.$t('trading-assistant.placeholders.inputSecretKey'),
+        'passphrase': this.$t('trading-assistant.placeholders.inputPassphrase')
+      }
+      return fieldLabels[fieldType] || this.$t('trading-assistant.placeholders.inputApiKey')
+    },
+    async handleTestConnection () {
+      this.testResult = null
+      this.testing = true
+
+      try {
+        // 构建需要验证的字段列表
+        const fieldsToValidate = ['exchange_id', 'api_key', 'secret_key']
+        if (this.needsPassphrase) {
+          fieldsToValidate.push('passphrase')
+        }
+
+        // 先验证表单字段
+        this.form.validateFields(fieldsToValidate, async (err, values) => {
+          if (err) {
+            this.testing = false
+            this.$message.error(this.$t('trading-assistant.exchange.fillComplete'))
+            return
+          }
+
+          try {
+            const marketType = (this.form.getFieldValue('market_type') || 'swap')
+            const exchangeConfig = {
+              exchange_id: values.exchange_id,
+              api_key: values.api_key,
+              secret_key: values.secret_key,
+              // IMPORTANT: let backend pick correct Binance endpoints (spot vs futures)
+              market_type: String(marketType || 'swap')
+            }
+
+            // 如果需要 passphrase，添加它
+            if (this.needsPassphrase && values.passphrase) {
+              exchangeConfig.passphrase = values.passphrase
+            }
+
+            const res = await testExchangeConnection(exchangeConfig)
+
+            this.testResult = {
+              success: res.code === 1,
+              message: res.msg || (res.code === 1 ? this.$t('trading-assistant.exchange.connectionSuccess') : this.$t('trading-assistant.exchange.connectionFailed'))
+            }
+            this.connectionTestResult = null
+
+            if (this.testResult.success) {
+              this.$message.success(this.$t('trading-assistant.exchange.connectionSuccess'))
+            } else {
+              this.$message.error(this.testResult.message || this.$t('trading-assistant.exchange.testFailed'))
+            }
+          } catch (error) {
+            this.testResult = {
+              success: false,
+              message: error.message || this.$t('trading-assistant.exchange.testFailed')
+            }
+            this.$message.error(this.testResult.message)
+          } finally {
+            this.testing = false
+          }
+        })
+      } catch (error) {
+        this.testResult = {
+          success: false,
+          message: this.$t('trading-assistant.exchange.testFailed')
+        }
+        this.$message.error(this.$t('trading-assistant.exchange.testFailed'))
+        this.testing = false
+      }
+    },
+    // 表单步骤控制
+    handleNext () {
+      if (this.currentStep === 0) {
+        // Step 1: basic config (strategy name/symbol/capital/leverage/market type/timeframe)
+        const fieldsToValidate = [
+          'indicator_id',
+          'strategy_name',
+          'symbol',
+          'initial_capital',
+          'market_type',
+          'leverage',
+          'trade_direction',
+          'timeframe'
+        ]
+        this.form.validateFields(fieldsToValidate, (err, values) => {
+          if (err) return
+          // Enforce spot limitations
+          try {
+            const marketType = (values && values.market_type) || this.form.getFieldValue('market_type')
+            if (marketType === 'spot') {
+              this.form.setFieldsValue({ leverage: 1, trade_direction: 'long' })
+            }
+          } catch (e) {}
+
+          // Init backtest-like UI states for Step 2 (Ant Form is not reactive).
+          this.backtestCollapseKeys = ['risk']
+          try {
+            this.trailingEnabledUi = !!this.form.getFieldValue('trailing_enabled')
+          } catch (e) {
+            this.trailingEnabledUi = false
+          }
+          this.$nextTick(() => {
+            this.recalcEntryPctMaxUi()
+            this.normalizeEntryPct()
+          })
+
+          this.currentStep++
+        })
+      } else if (this.currentStep === 1) {
+        // Step 2: backtest-like configs are optional; proceed directly.
+        // Sync UI states from form (Ant Form values are not always reactive)
+        try {
+          const execMode = this.form.getFieldValue('execution_mode') || 'signal'
+          this.executionModeUi = execMode
+          const chans = this.form.getFieldValue('notify_channels') || ['browser']
+          this.notifyChannelsUi = Array.isArray(chans) ? chans : ['browser']
+        } catch (e) {}
+        this.currentStep++
+      }
+    },
+    handlePrev () {
+      if (this.currentStep > 0) {
+        this.currentStep--
+      }
+    },
+    async handleSubmit () {
+      this.form.validateFields(async (err, values) => {
+        if (!err) {
+          try {
+            this.saving = true
+            const isLive = this.isCryptoMarket && values.execution_mode === 'live'
+
+            if (isLive) {
+              const testResult = this.testResult
+              if (!testResult) {
+                this.$message.warning(this.$t('trading-assistant.validation.testConnectionRequired'))
+                this.saving = false
+                return
+              }
+              if (!testResult.success) {
+                this.$message.warning(this.$t('trading-assistant.validation.testConnectionFailed'))
+                this.saving = false
+                return
+              }
+            }
+
+            const notificationConfig = {
+              channels: values.notify_channels || [],
+              targets: {
+                email: values.notify_email || '',
+                phone: values.notify_phone || '',
+                telegram: values.notify_telegram || '',
+                discord: values.notify_discord || '',
+                webhook: values.notify_webhook || ''
+              }
+            }
+            if (!notificationConfig.channels || notificationConfig.channels.length === 0) {
+              this.$message.warning(this.$t('trading-assistant.validation.notifyChannelRequired'))
+              this.saving = false
+              return
+            }
+
+            // Indicator strategy submit logic (local mode)
+            const indicatorIdStr = String(values.indicator_id)
+            const indicator = this.availableIndicators.find(ind => String(ind.id) === indicatorIdStr)
+            if (!indicator) {
+              this.$message.error(this.$t('trading-assistant.validation.indicatorRequired'))
+              this.saving = false
+              return
+            }
+
+            // AI filter values: source of truth is the reactive UI state to avoid rc-form edge cases.
+            let rawAiPrompt = values.ai_filter_prompt
+            try {
+              if (rawAiPrompt === undefined) rawAiPrompt = this.form.getFieldValue('ai_filter_prompt')
+            } catch (e) {}
+            const enableAiFilter = !!this.aiFilterEnabledUi
+            const aiFilterPrompt = (
+              (typeof rawAiPrompt === 'string' && rawAiPrompt.length > 0)
+                ? rawAiPrompt
+                : (typeof this.aiFilterPromptUi === 'string' ? this.aiFilterPromptUi : '')
+            )
+
+            const marketType = (values.market_type === 'futures' ? 'swap' : (values.market_type || 'swap'))
+            let leverage = values.leverage || 1
+            let tradeDirection = values.trade_direction || 'long'
+
+            if (marketType === 'spot') {
+              leverage = 1
+              tradeDirection = 'long'
+              this.$message.info(this.$t('trading-assistant.messages.spotLimitations'))
+            } else {
+              if (leverage < 1) leverage = 1
+              if (leverage > 125) leverage = 125
+            }
+
+            // Watchlist-style symbol value: "Market:SYMBOL"
+            let parsedMarketCategory = (values.market_category || this.selectedMarketCategory || 'Crypto')
+            let parsedSymbol = values.symbol
+            if (typeof parsedSymbol === 'string' && parsedSymbol.includes(':')) {
+              const idx = parsedSymbol.indexOf(':')
+              parsedMarketCategory = parsedSymbol.slice(0, idx) || parsedMarketCategory
+              parsedSymbol = parsedSymbol.slice(idx + 1)
+            }
+
+            const payload = {
+              strategy_name: values.strategy_name,
+              market_category: parsedMarketCategory,
+              execution_mode: values.execution_mode || 'signal',
+              notification_config: notificationConfig,
+              indicator_config: {
+                indicator_id: indicator.id,
+                indicator_name: indicator.name,
+                indicator_code: indicator.code || ''
+              },
+              exchange_config: isLive ? {
+                exchange_id: values.exchange_id,
+                credential_id: values.credential_id,
+                api_key: values.api_key,
+                secret_key: values.secret_key,
+                passphrase: this.needsPassphrase ? values.passphrase : undefined
+              } : undefined,
+              trading_config: {
+                symbol: parsedSymbol,
+                initial_capital: values.initial_capital,
+                leverage: leverage,
+                trade_direction: tradeDirection,
+                timeframe: values.timeframe,
+                market_type: marketType,
+                // Preset order params (advanced settings removed from UI)
+                order_mode: 'maker',
+                margin_mode: 'cross',
+                signal_mode: 'confirmed',
+                // Backtest-like configs
+                take_profit_pct: values.take_profit_pct || 0,
+                stop_loss_pct: values.stop_loss_pct || 0,
+                trailing_enabled: !!values.trailing_enabled,
+                trailing_stop_pct: values.trailing_stop_pct || 0,
+                trailing_activation_pct: values.trailing_activation_pct || 0,
+                trend_add_enabled: !!values.trend_add_enabled,
+                trend_add_step_pct: values.trend_add_step_pct || 0,
+                trend_add_size_pct: values.trend_add_size_pct || 0,
+                trend_add_max_times: values.trend_add_max_times || 0,
+                dca_add_enabled: !!values.dca_add_enabled,
+                dca_add_step_pct: values.dca_add_step_pct || 0,
+                dca_add_size_pct: values.dca_add_size_pct || 0,
+                dca_add_max_times: values.dca_add_max_times || 0,
+                trend_reduce_enabled: !!values.trend_reduce_enabled,
+                trend_reduce_step_pct: values.trend_reduce_step_pct || 0,
+                trend_reduce_size_pct: values.trend_reduce_size_pct || 0,
+                trend_reduce_max_times: values.trend_reduce_max_times || 0,
+                adverse_reduce_enabled: !!values.adverse_reduce_enabled,
+                adverse_reduce_step_pct: values.adverse_reduce_step_pct || 0,
+                adverse_reduce_size_pct: values.adverse_reduce_size_pct || 0,
+                adverse_reduce_max_times: values.adverse_reduce_max_times || 0,
+                entry_pct: (values.entry_pct === 0 || values.entry_pct) ? values.entry_pct : 100,
+                commission: values.commission || 0,
+                slippage: values.slippage || 0,
+                // AI智能决策过滤
+                enable_ai_filter: enableAiFilter,
+                ai_filter_prompt: aiFilterPrompt
+              }
+            }
+
+            let res
+            if (this.editingStrategy) {
+              res = await updateStrategy(this.editingStrategy.id, payload)
+            } else {
+              payload.user_id = 1
+              payload.strategy_type = 'IndicatorStrategy'
+              res = await createStrategy(payload)
+            }
+
+            if (res.code === 1) {
+              this.$message.success(this.isEditMode ? this.$t('trading-assistant.messages.updateSuccess') : this.$t('trading-assistant.messages.createSuccess'))
+              if (isLive && values.save_credential) {
+                // Save credential to vault (best-effort)
+                try {
+                  await createExchangeCredential({
+                    user_id: 1,
+                    name: values.credential_name || '',
+                    exchange_id: values.exchange_id,
+                    api_key: values.api_key,
+                    secret_key: values.secret_key,
+                    passphrase: values.passphrase || ''
+                  })
+                  this.loadExchangeCredentials()
+                } catch (e) {
+                  // Silent fail: vault is optional.
+                }
+              }
+              this.handleRefresh()
+            } else {
+              this.$message.error(res.msg || (this.isEditMode ? this.$t('trading-assistant.messages.updateFailed') : this.$t('trading-assistant.messages.createFailed')))
+            }
+          } catch (error) {
+            this.$message.error(this.isEditMode ? this.$t('trading-assistant.messages.updateFailed') : this.$t('trading-assistant.messages.createFailed'))
+          } finally {
+            this.saving = false
+          }
+        }
+      })
+    },
+    getFormValues () {
+      return new Promise((resolve, reject) => {
+        this.form.validateFields((err, values) => {
+          if (err) {
+            reject(err)
+          } else {
+            resolve(values)
+          }
+        })
+      })
+    },
+    getDropdownContainer (triggerNode) {
+      // 移动端将下拉菜单挂载到body，避免被父容器裁剪
+      return this.isMobile ? document.body : triggerNode.parentNode
+    }
+  }
+}
+</script>
+
+<style lang="less" scoped>
+.trading-assistant {
+  padding: 0px;
+  // min-height: 100vh;
+  height: calc(100vh - 120px);
+
+  .strategy-layout {
+    height: calc(100vh - 120px);
+  }
+
+  // 移动端适配
+  @media (max-width: 768px) {
+    min-height: auto;
+    margin: -24px;
+
+    .strategy-layout {
+      height: auto;
+      min-height: calc(100vh - 120px);
+    }
+
+    .strategy-list-col {
+      margin-bottom: 12px;
+      height: auto;
+      max-height: 50vh;
+
+      .strategy-list-card {
+        height: auto;
+        max-height: 50vh;
+
+        .card-title {
+          flex-wrap: wrap;
+          gap: 8px;
+          padding: 12px 16px;
+
+          span {
+            font-size: 14px;
+            font-weight: 600;
+          }
+
+          .ant-btn {
+            font-size: 12px;
+            padding: 0 10px;
+            height: 28px;
+            line-height: 28px;
+          }
+        }
+
+        /deep/ .ant-card-body {
+          max-height: calc(50vh - 60px);
+          overflow-y: auto;
+          padding: 8px;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        /deep/ .ant-card-head {
+          padding: 0;
+          min-height: 48px;
+        }
+
+        .strategy-list-item {
+          padding: 12px 8px;
+          margin-bottom: 4px;
+          border-radius: 8px;
+
+          /deep/ .ant-list-item-meta {
+            width: 100%;
+          }
+
+          /deep/ .ant-list-item-action {
+            margin-left: 8px;
+          }
+
+          .strategy-item-header {
+            width: 100%;
+
+            .strategy-name-wrapper {
+              width: 100%;
+              display: flex;
+              align-items: center;
+              gap: 6px;
+              margin-bottom: 6px;
+              flex-wrap: wrap;
+
+              .strategy-type-tag {
+                font-size: 10px;
+                padding: 2px 6px;
+                line-height: 1.4;
+                margin: 0;
+              }
+
+              .exchange-tag {
+                font-size: 10px;
+                padding: 2px 6px;
+                line-height: 1.4;
+                margin: 0;
+
+                .anticon {
+                  font-size: 10px;
+                  margin-right: 2px;
+                }
+              }
+
+              .strategy-name {
+                font-size: 14px;
+                font-weight: 600;
+                flex: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+            }
+          }
+
+          /deep/ .ant-list-item-meta-description {
+            .strategy-item-info {
+              display: flex !important;
+              flex-direction: row;
+              align-items: center;
+              gap: 6px;
+              margin-top: 4px;
+              font-size: 11px;
+              flex-wrap: wrap;
+
+              .info-item {
+                display: flex;
+                align-items: center;
+                gap: 3px;
+                flex-shrink: 0;
+                font-size: 11px;
+
+                .anticon {
+                  font-size: 11px;
+                }
+              }
+
+              .status-label {
+                font-size: 10px;
+                padding: 2px 6px;
+                line-height: 1.4;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    .strategy-detail-col {
+      height: auto;
+      min-height: calc(50vh - 60px);
+
+      .strategy-detail-panel {
+        gap: 12px;
+
+        .strategy-header-card {
+          /deep/ .ant-card-body {
+            padding: 16px 12px;
+          }
+
+          /deep/ .ant-card-head {
+            padding: 0;
+          }
+
+          .strategy-header {
+            flex-direction: column;
+            gap: 12px;
+
+            .header-left {
+              width: 100%;
+
+              .strategy-title {
+                font-size: 18px;
+                font-weight: 600;
+                margin-bottom: 12px;
+                line-height: 1.4;
+                word-break: break-word;
+              }
+
+              .strategy-meta {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+                align-items: start;
+
+                /deep/ .ant-tag {
+                  grid-column: 1 / -1;
+                  justify-self: start;
+                  margin: 0;
+                  font-size: 11px;
+                  padding: 4px 8px;
+                }
+
+                .meta-item {
+                  display: flex;
+                  align-items: flex-start;
+                  gap: 4px;
+                  font-size: 12px;
+                  line-height: 1.5;
+                  word-break: break-word;
+
+                  .anticon {
+                    font-size: 12px;
+                    flex-shrink: 0;
+                    margin-top: 2px;
+                  }
+
+                  // 确保文本可换行
+                  & > span {
+                    word-break: break-word;
+                    line-height: 1.5;
+                    flex: 1;
+                  }
+
+                  // 对于包含数值的span
+                  span:not(.anticon) {
+                    display: inline;
+                    word-break: break-word;
+                    overflow-wrap: break-word;
+                  }
+                }
+
+                // 如果参数过多，使用单列布局
+                @media (max-width: 480px) {
+                  grid-template-columns: 1fr;
+
+                  /deep/ .ant-tag {
+                    grid-column: 1;
+                  }
+                }
+              }
+            }
+
+            .header-right {
+              width: 100%;
+              display: flex;
+              justify-content: flex-start;
+              gap: 8px;
+              flex-wrap: wrap;
+
+              .ant-btn {
+                flex: 1;
+                min-width: 100px;
+                font-size: 13px;
+                padding: 0 12px;
+                height: 36px;
+                line-height: 36px;
+
+                .anticon {
+                  margin-right: 4px;
+                }
+              }
+            }
+          }
+        }
+
+        .strategy-content-card {
+          /deep/ .ant-card-body {
+            padding: 12px 8px;
+            overflow-x: hidden;
+          }
+
+          /deep/ .ant-card-head {
+            padding: 0 8px;
+          }
+
+          /deep/ .ant-tabs {
+            .ant-tabs-nav {
+              padding: 0 4px;
+
+              .ant-tabs-tab {
+                font-size: 13px;
+                padding: 8px 10px;
+                margin: 0 2px;
+                white-space: nowrap;
+              }
+            }
+
+            .ant-tabs-content {
+              padding-top: 12px;
+              overflow-x: hidden;
+
+              .ant-tabs-tabpane {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 超小屏幕适配
+  @media (max-width: 480px) {
+    .strategy-list-col {
+      max-height: 45vh;
+
+      .strategy-list-card {
+        max-height: 45vh;
+
+        /deep/ .ant-card-body {
+          max-height: calc(45vh - 60px);
+        }
+      }
+    }
+
+    .strategy-detail-col {
+      .strategy-detail-panel {
+        .strategy-header-card {
+          .strategy-header {
+            .header-left {
+              .strategy-meta {
+                grid-template-columns: 1fr;
+                gap: 6px;
+
+                .meta-item {
+                  font-size: 11px;
+                  line-height: 1.6;
+                }
+              }
+            }
+
+            .header-right {
+              .ant-btn {
+                width: 100%;
+                flex: none;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  .strategy-list-col {
+    height: 100%;
+
+    .strategy-list-card {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+
+      .card-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      /deep/ .ant-card-body {
+        flex: 1;
+        overflow-y: auto;
+        background: #fff;
+      }
+
+      /deep/ .ant-card-head {
+        background: #fff;
+      }
+
+      .strategy-list-item {
+        cursor: pointer;
+        padding: 12px;
+        border-radius: 4px;
+        transition: all 0.3s;
+        position: relative;
+
+        &:hover {
+          background-color: var(--hover-bg-color, #f5f5f5);
+        }
+
+        &.active {
+          background-color: var(--active-bg-color, #e6f7ff);
+          border-left: 3px solid var(--primary-color, #1890ff);
+        }
+
+        // 移动端优化点击区域
+        @media (max-width: 768px) {
+          padding: 12px 8px;
+          margin: 0 4px 4px 4px;
+
+          &.active {
+            border-left-width: 2px;
+          }
+        }
+
+        .strategy-item-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+
+          .strategy-name-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            min-width: 0; // 允许内容收缩
+
+            .strategy-name {
+              font-weight: 600;
+              font-size: 14px;
+              flex-shrink: 0;
+            }
+
+              .exchange-tag {
+                flex-shrink: 0;
+                display: inline-flex;
+                align-items: center;
+                font-size: 11px;
+                line-height: 1.5;
+
+                .anticon {
+                  font-size: 12px;
+                }
+              }
+
+              .strategy-type-tag {
+                flex-shrink: 0;
+                display: inline-flex;
+                align-items: center;
+                font-size: 11px;
+                line-height: 1.5;
+                margin-left: 4px;
+
+                .anticon {
+                  font-size: 11px;
+                  margin-right: 2px;
+                }
+              }
+            }
+
+          /deep/ .status-stopped {
+            color: #ff4d4f !important;
+            border-color: #ff4d4f !important;
+          }
+        }
+
+        /deep/ .ant-list-item-meta-description {
+          max-width: calc(100% - 20px); // 留出空间给右侧操作按钮和选中边框
+          overflow: hidden;
+
+          .strategy-item-info {
+            display: flex !important;
+            gap: 12px; // 减小间距
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-color-secondary, #8c8c8c);
+            align-items: center;
+            flex-wrap: nowrap; // 禁止换行
+            max-width: 100%;
+            overflow: hidden;
+
+            .status-label {
+              display: inline-flex;
+              align-items: center;
+              padding: 2px 8px;
+              border-radius: 10px;
+              font-size: 12px;
+              font-weight: 600;
+              line-height: 1;
+              border: 1px solid transparent;
+              flex-shrink: 0;
+              background: #f0f2f5;
+              color: #595959;
+            }
+
+            .status-running {
+              background: rgba(14, 203, 129, 0.12);
+              color: #0ecb81;
+              border-color: rgba(14, 203, 129, 0.35);
+            }
+
+            .status-stopped {
+              background: rgba(246, 70, 93, 0.12);
+              color: #f6465d;
+              border-color: rgba(246, 70, 93, 0.35);
+            }
+
+            .status-error {
+              background: rgba(255, 77, 79, 0.12);
+              color: #ff4d4f;
+              border-color: rgba(255, 77, 79, 0.35);
+            }
+
+            .info-item {
+              display: flex;
+              align-items: center;
+              gap: 4px;
+              flex-shrink: 1;
+              min-width: 0;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  .strategy-detail-col {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    .empty-detail {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .strategy-detail-panel {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+
+      .strategy-header-card {
+        background: #fff;
+        border-color: #e8e8e8;
+
+        /deep/ .ant-card-head {
+          background: #fff;
+          border-bottom-color: #e8e8e8;
+        }
+
+        /deep/ .ant-card-body {
+          background: #fff;
+        }
+
+        .strategy-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+
+          .header-left {
+            flex: 1;
+
+            .strategy-title {
+              font-size: 20px;
+              font-weight: 600;
+              margin: 0 0 12px 0;
+            }
+
+            .strategy-meta {
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              flex-wrap: wrap;
+
+              .meta-item {
+                display: flex;
+                align-items: flex-start;
+                gap: 4px;
+                color: var(--text-color-secondary, #8c8c8c);
+                font-size: 14px;
+                line-height: 1.5;
+                word-break: break-word;
+
+                .anticon {
+                  flex-shrink: 0;
+                  margin-top: 2px;
+                }
+
+                // 确保内部span可以换行
+                & > span:not(.anticon) {
+                  word-break: break-word;
+                  overflow-wrap: break-word;
+                }
+              }
+
+              .text-success {
+                color: #52c41a;
+              }
+
+              .text-danger {
+                color: #f5222d;
+              }
+
+              /deep/ .status-stopped {
+                color: #ff4d4f !important;
+                border-color: #ff4d4f !important;
+              }
+            }
+          }
+        }
+      }
+
+      .strategy-content-card {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+        border-color: #e8e8e8;
+
+        /deep/ .ant-card-head {
+          background: #fff;
+          border-bottom-color: #e8e8e8;
+        }
+
+        /deep/ .ant-card-body {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          padding: 16px;
+          min-height: 0; // 重要：允许 flex 子元素缩小
+          background: #fff;
+
+          .ant-tabs {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0; // 重要：允许 flex 子元素缩小
+
+            .ant-tabs-content {
+              flex: 1;
+              min-height: 0; // 重要：允许 flex 子元素缩小
+              overflow: visible; // 允许内容显示
+            }
+
+            .ant-tabs-tabpane {
+              height: 100%;
+              overflow: visible;
+
+              .trading-records {
+                width: 100%;
+                min-height: 300px;
+                overflow-x: auto;
+                overflow-y: visible;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  &.theme-dark {
+    background-color: var(--dark-bg-color, #141414);
+    color: var(--dark-text-color, #fff);
+
+    // 左侧策略列表卡片
+    .strategy-list-col {
+      .strategy-list-card {
+        background: #1e222d;
+        border-color: #2a2e39;
+
+        /deep/ .ant-card-head {
+          background: #1e222d;
+          border-bottom-color: #2a2e39;
+
+          .ant-card-head-title {
+            color: #d1d4dc;
+          }
+        }
+
+        /deep/ .ant-card-body {
+          background: #1e222d;
+        }
+
+        /deep/ .ant-empty-description {
+          color: #868993;
+        }
+
+        /deep/ .ant-list {
+          .ant-list-item {
+            border-bottom-color: #2a2e39;
+
+            .ant-list-item-meta-title {
+              color: #d1d4dc;
+            }
+
+            .ant-list-item-meta-description {
+              color: #868993;
+            }
+          }
+        }
+      }
+
+      .strategy-list-item {
+        background: #1e222d;
+        border-color: #2a2e39;
+
+        &:hover {
+          background-color: var(--dark-hover-bg-color, #2a2e39);
+        }
+
+        &.active {
+          background-color: var(--dark-active-bg-color, #111b26);
+          border-left-color: var(--primary-color, #1890ff);
+        }
+
+        .strategy-name {
+          color: #d1d4dc;
+        }
+
+        .strategy-item-info {
+          color: #868993;
+        }
+      }
+    }
+
+    // 右侧策略详情卡片
+    .strategy-detail-col {
+      .strategy-header-card {
+        background: #1e222d;
+        border-color: #2a2e39;
+
+        /deep/ .ant-card-head {
+          background: #1e222d;
+          border-bottom-color: #2a2e39;
+        }
+
+        /deep/ .ant-card-body {
+          background: #1e222d;
+        }
+
+        .strategy-title {
+          color: #d1d4dc;
+        }
+
+        .strategy-meta {
+          .meta-item {
+            color: #868993;
+          }
+        }
+      }
+
+      .strategy-content-card {
+        background: #1e222d;
+        border-color: #2a2e39;
+
+        /deep/ .ant-card-head {
+          background: #1e222d;
+          border-bottom-color: #2a2e39;
+
+          .ant-card-head-title {
+            color: #d1d4dc;
+          }
+        }
+
+        /deep/ .ant-card-body {
+          background: #1e222d;
+        }
+
+        /deep/ .ant-tabs {
+          .ant-tabs-nav {
+            .ant-tabs-tab {
+              color: #868993;
+
+              &:hover {
+                color: #d1d4dc;
+              }
+
+              &.ant-tabs-tab-active {
+                .ant-tabs-tab-btn {
+                  color: #1890ff;
+                }
+              }
+            }
+
+            .ant-tabs-ink-bar {
+              background: #1890ff;
+            }
+          }
+
+          .ant-tabs-content {
+            color: #d1d4dc;
+          }
+        }
+
+        /deep/ .ant-empty-description {
+          color: #868993;
+        }
+      }
+    }
+
+    // 空状态
+    .empty-detail {
+      /deep/ .ant-empty-description {
+        color: #868993;
+      }
+    }
+  }
+}
+
+/* AI filter box (Step 2) */
+.ai-filter-box {
+  margin-top: 12px;
+  padding: 14px 14px 12px;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fafcff 0%, #ffffff 100%);
+}
+
+.ai-filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-filter-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #262626;
+}
+
+.ai-filter-title .anticon {
+  color: #1890ff;
+}
+
+.ai-filter-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8c8c8c;
+}
+
+.ai-filter-body {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e8e8e8;
+}
+
+.ai-filter-prompt-label {
+  font-size: 12px;
+  color: #595959;
+  margin-bottom: 6px;
+}
+
+.ai-filter-prompt-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8c8c8c;
+}
+
+.symbol-option {
+  display: flex;
+  align-items: center;
+}
+
+.symbol-name {
+  font-weight: 600;
+  color: #8f8d8d;
+  margin-right: 8px;
+}
+
+.symbol-name-extra {
+  font-size: 12px;
+  color: #999;
+  margin-left: 4px;
+}
+
+// 弹窗样式
+.steps-container {
+  margin-bottom: 24px;
+
+  @media (max-width: 768px) {
+    margin-bottom: 16px;
+
+    /deep/ .ant-steps-item-title {
+      font-size: 12px;
+    }
+
+    /deep/ .ant-steps-item-icon {
+      width: 24px;
+      height: 24px;
+      line-height: 24px;
+      font-size: 12px;
+    }
+  }
+}
+
+.form-container {
+  min-height: 400px;
+  padding: 24px 0;
+
+  .step-content {
+    animation: fadeIn 0.3s;
+  }
+
+  @media (max-width: 768px) {
+    min-height: 300px;
+    padding: 16px 0;
+
+    /deep/ .ant-form-item-label {
+      padding-bottom: 4px;
+
+      label {
+        font-size: 13px;
+      }
+    }
+
+    /deep/ .ant-input,
+    /deep/ .ant-input-number,
+    /deep/ .ant-select {
+      font-size: 14px;
+    }
+
+    /deep/ .ant-radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+
+      .ant-radio-wrapper {
+        font-size: 13px;
+      }
+    }
+  }
+
+  @media (max-width: 480px) {
+    min-height: 250px;
+    padding: 12px 0;
+
+    /deep/ .ant-form-item-label label {
+      font-size: 12px;
+    }
+
+    /deep/ .ant-input,
+    /deep/ .ant-input-number,
+    /deep/ .ant-select {
+      font-size: 13px;
+    }
+  }
+}
+
+.strategy-type-selector {
+  padding: 16px 0;
+
+  .market-category-selector {
+    margin-bottom: 16px;
+
+    .selector-label {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #262626;
+    }
+
+    /deep/ .ant-radio-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+  }
+
+  .strategy-type-card {
+    cursor: pointer;
+    transition: all 0.3s;
+    height: 100%;
+    min-height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &:hover {
+      border-color: #1890ff;
+      box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
+    }
+
+    &.selected {
+      border-color: #1890ff;
+      background-color: #e6f7ff;
+      box-shadow: 0 2px 8px rgba(24, 144, 255, 0.3);
+    }
+
+    .strategy-type-content {
+      text-align: center;
+      padding: 16px;
+
+      .strategy-type-icon {
+        font-size: 48px;
+        color: #1890ff;
+        margin-bottom: 16px;
+      }
+
+      h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: #1f1f1f;
+      }
+
+      p {
+        font-size: 14px;
+        color: #8c8c8c;
+        margin: 0;
+        line-height: 1.6;
+      }
+    }
+  }
+}
+
+.indicator-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  .indicator-name {
+    flex: 1;
+  }
+}
+
+.indicator-description {
+  padding: 12px;
+  background-color: var(--bg-color-secondary, #f5f5f5);
+  border-radius: 4px;
+  color: var(--text-color, #666);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.form-item-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-color-secondary, #8c8c8c);
+}
+
+.test-result {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 14px;
+
+  &.success {
+    background-color: #f6ffed;
+    border: 1px solid #b7eb8f;
+    color: #52c41a;
+  }
+}
+
+.ip-whitelist-tip {
+  margin-top: 12px;
+  padding: 12px;
+  background-color: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1890ff;
+  line-height: 1.6;
+
+  .anticon {
+    margin-right: 6px;
+    color: #1890ff;
+  }
+
+  .ip-list {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+
+    .ant-tag {
+      margin: 0;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+    }
+  }
+
+  &.error {
+    background-color: #fff2f0;
+    border: 1px solid #ffccc7;
+    color: #ff4d4f;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/deep/ .danger-item {
+  color: #ff4d4f;
+}
+
+// 移动端弹窗样式
+/deep/ .mobile-modal {
+  .ant-modal {
+    top: 20px;
+    padding-bottom: 0;
+  }
+
+  .ant-modal-content {
+    max-height: calc(100vh - 40px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px;
+  }
+
+  .ant-modal-footer {
+    padding: 12px 16px;
+    border-top: 1px solid #e8e8e8;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+
+    .ant-btn {
+      font-size: 13px;
+      padding: 0 12px;
+      height: 32px;
+    }
+  }
+}
+
+</style>
