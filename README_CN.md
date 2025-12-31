@@ -267,9 +267,9 @@ QuantDinger 支持**直连**主要加密货币交易所进行低延迟执行，�
 
 | 交易所 | 特点 | 注册福利 |
 |:--------:|:---------|:-------------:|
-| <img src="https://img.shields.io/badge/Binance-F0B90B?style=for-the-badge&logo=binance&logoColor=white" height="35"/> | 🥇 **全球最大**<br/>现货, 合约, 杠杆 | <a href="https://www.bjwebptyiou.com/join/14449926"><img src="https://img.shields.io/badge/💰_节省_20%25_手续费-00C853?style=for-the-badge" height="35"/></a> |
-| <img src="https://img.shields.io/badge/OKX-000000?style=for-the-badge&logo=okx&logoColor=white" height="35"/> | 🚀 **Web3 & 衍生品**<br/>现货, 永续, 期权 | <a href="https://www.bmwweb.ac/referral/earn-together/refer2earn-usdc/claim?hl=zh-CN&ref=GRO_28502_9OSOJ"><img src="https://img.shields.io/badge/🎁_领取盲盒-00C853?style=for-the-badge" height="35"/></a> |
-| <img src="https://img.shields.io/badge/Bitget-00C7B1?style=for-the-badge&logoColor=white" height="35"/> | 👥 **社交交易**<br/>跟单交易, 合约 | <a href="https://www.bitget.rocks/zh-CN/referral/register?clacCode=91AWLH0U&from=%2Fzh-CN%2Fevents%2Freferral-all-program&source=events&utmSource=PremierInviter"><img src="https://img.shields.io/badge/🔥_领取赠金-00C853?style=for-the-badge" height="35"/></a> |
+| <img src="https://img.shields.io/badge/Binance-F0B90B?style=for-the-badge&logo=binance&logoColor=white" height="35"/> | 🥇 **全球最大**<br/>现货, 合约, 杠杆 | <a href="https://www.bmwweb.ac/referral/earn-together/refer2earn-usdc/claim?hl=zh-CN&ref=GRO_28502_9OSOJ"><img src="https://img.shields.io/badge/💰_节省_20%25_手续费-FF4D4F?style=for-the-badge" height="38" style="border-radius:10px; box-shadow:0 8px 18px rgba(255,77,79,.35);"/></a> |
+| <img src="https://img.shields.io/badge/OKX-000000?style=for-the-badge&logo=okx&logoColor=white" height="35"/> | 🚀 **Web3 & 衍生品**<br/>现货, 永续, 期权 | <a href="https://www.bjwebptyiou.com/join/14449926"><img src="https://img.shields.io/badge/🎁_领取盲盒-722ED1?style=for-the-badge" height="38" style="border-radius:10px; box-shadow:0 8px 18px rgba(114,46,209,.35);"/></a> |
+| <img src="https://img.shields.io/badge/Bitget-00C7B1?style=for-the-badge&logoColor=white" height="35"/> | 👥 **社交交易**<br/>跟单交易, 合约 | <a href="https://share.glassgs.com/u/H8XZGS71"><img src="https://img.shields.io/badge/🔥_领取赠金-FA8C16?style=for-the-badge" height="38" style="border-radius:10px; box-shadow:0 8px 18px rgba(250,140,22,.35);"/></a> |
 
 <br>
 

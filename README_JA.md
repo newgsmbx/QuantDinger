@@ -237,9 +237,9 @@ QuantDingerは、低遅延実行のために主要な暗号資産取引所への
 
 | 取引所 | 特徴 | サインアップボーナス |
 |:--------:|:---------|:-------------:|
-| <img src="https://img.shields.io/badge/Binance-F0B90B?style=for-the-badge&logo=binance&logoColor=white" height="35"/> | 🥇 **世界最大**<br/>現物, 先物, マージン | <a href="https://www.bjwebptyiou.com/join/14449926"><img src="https://img.shields.io/badge/💰_手数料_20%25_OFF-00C853?style=for-the-badge" height="35"/></a> |
-| <img src="https://img.shields.io/badge/OKX-000000?style=for-the-badge&logo=okx&logoColor=white" height="35"/> | 🚀 **Web3 & デリバティブ**<br/>現物, 無期限, オプション | <a href="https://www.bmwweb.ac/referral/earn-together/refer2earn-usdc/claim?hl=zh-CN&ref=GRO_28502_9OSOJ"><img src="https://img.shields.io/badge/🎁_ミステリーボックス-00C853?style=for-the-badge" height="35"/></a> |
-| <img src="https://img.shields.io/badge/Bitget-00C7B1?style=for-the-badge&logoColor=white" height="35"/> | 👥 **ソーシャルトレーディング**<br/>コピートレーディング, 先物 | <a href="https://www.bitget.rocks/zh-CN/referral/register?clacCode=91AWLH0U&from=%2Fzh-CN%2Fevents%2Freferral-all-program&source=events&utmSource=PremierInviter"><img src="https://img.shields.io/badge/🔥_ボーナス請求-00C853?style=for-the-badge" height="35"/></a> |
+| <img src="https://img.shields.io/badge/Binance-F0B90B?style=for-the-badge&logo=binance&logoColor=white" height="35"/> | 🥇 **世界最大**<br/>現物, 先物, マージン | <a href="https://www.bmwweb.ac/referral/earn-together/refer2earn-usdc/claim?hl=zh-CN&ref=GRO_28502_9OSOJ"><img src="https://img.shields.io/badge/💰_手数料_20%25_OFF-FF4D4F?style=for-the-badge" height="38" style="border-radius:10px; box-shadow:0 8px 18px rgba(255,77,79,.35);"/></a> |
+| <img src="https://img.shields.io/badge/OKX-000000?style=for-the-badge&logo=okx&logoColor=white" height="35"/> | 🚀 **Web3 & デリバティブ**<br/>現物, 無期限, オプション | <a href="https://www.bjwebptyiou.com/join/14449926"><img src="https://img.shields.io/badge/🎁_ミステリーボックス-722ED1?style=for-the-badge" height="38" style="border-radius:10px; box-shadow:0 8px 18px rgba(114,46,209,.35);"/></a> |
+| <img src="https://img.shields.io/badge/Bitget-00C7B1?style=for-the-badge&logoColor=white" height="35"/> | 👥 **ソーシャルトレーディング**<br/>コピートレーディング, 先物 | <a href="https://share.glassgs.com/u/H8XZGS71"><img src="https://img.shields.io/badge/🔥_ボーナス請求-FA8C16?style=for-the-badge" height="38" style="border-radius:10px; box-shadow:0 8px 18px rgba(250,140,22,.35);"/></a> |
 
 <br>
 
